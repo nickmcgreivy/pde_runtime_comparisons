@@ -10,6 +10,7 @@ import tree_math
 import functools
 import operator
 import scipy.linalg
+from helper import inner_prod_with_legendre
 
 class BCType:
   PERIODIC = 'periodic'
@@ -183,7 +184,6 @@ def consistent_offset(*arrays):
         f'arrays do not have a unique offset: {offsets}')
   offset, = offsets
   return offset
-
 
 
 @dataclasses.dataclass(init=False, frozen=True)
@@ -906,8 +906,6 @@ def navier_stokes_rk(tableau, equation, time_step):
 
     u_star = u0 + dt * sum(b[j] * k[j] for j in range(num_steps) if b[j])
 
-    print(u_star)
-
     u_final = P(u_star)
 
     return u_final
@@ -956,8 +954,11 @@ def navier_stokes_explicit_terms(viscosity, dt, forcing):
   def _explicit_terms(v):
     dv_dt = convection(v)
     if viscosity > 0.0:
+      print(viscosity)
+      print(diffusion(v, viscosity))
       dv_dt += diffusion(v, viscosity)
     if forcing is not None:
+      print(forcing(v))
       dv_dt += forcing(v)
     return dv_dt
 
@@ -979,15 +980,27 @@ def semi_implicit_navier_stokes(viscosity, dt, pressure_solve, forcing):
   step_fn = forward_euler(ode, dt)
   return step_fn
 
-
-
 ###### IMPORT THESE FUNCTIONS
 
-def vorticity_to_velocity(omega):
-  raise NotImplementedError
+def get_forcing(args, nx, ny):
+  ff = lambda x, y, t: jnp.sin(4 * (2 * np.pi / args.Ly) * y)
+  shape = (nx, ny)
+  domain = ((0, args.Lx), (0, args.Ly))
+  grid = Grid(shape, domain=domain)
+  x_term = inner_prod_with_legendre(nx, ny, args.Lx, args.Ly, 0, ff, 0.0, n = 1)[:,:,0]
+  x_term = args.forcing_coefficient * GridArray(x_term, (1, 1/2), grid)
+  y_term = GridArray(jnp.zeros_like(x_term.data), (1/2, 1), grid)
+  constant_term = (x_term, y_term)
+  dx = args.Lx / nx
+  dy = args.Ly / ny
+  C = args.forcing_coefficient * dx * dy * args.damping_coefficient
+  def f_forcing(v):
+    return tuple( c_i - C * v_i.array for c_i, v_i in zip(constant_term, v))
 
+  return f_forcing
 
 def vorticity(v):
+  # calculated at offset = (1, 1)
   u_x, u_y = v
   dx, dy = u_x.array.grid.step
   du_y_dx = (jnp.roll(u_y.array.data, -1, axis=0) - u_y.array.data) / dx
@@ -995,29 +1008,29 @@ def vorticity(v):
   return (du_y_dx - du_x_dy)
 
 
-def get_step_func(nx, ny, Lx, Ly, dt, nu, pressure_solve = solve_fast_diag):
-  ndims = 2
-  bcs = periodic_boundary_conditions(ndims)
-  step_func = semi_implicit_navier_stokes(nu, dt, pressure_solve, None)
-  return step_func
+def get_step_func(nu, dt, pressure_solve = solve_fast_diag, forcing=None):
+  return semi_implicit_navier_stokes(nu, dt, pressure_solve, forcing)
 
+@functools.partial(jax.jit, static_argnums=(1, 2))
 def simulate_baseline(v, step_func, nt):
   def _scanf(v, x):
     return step_func(v), None
   vf, _ = jax.lax.scan(_scanf, v, None, length=nt)
   return vf
 
-
-def get_init_velocity(args, u_x_0, u_y_0):
-  assert u_x_0.shape == u_y_0.shape
-  shape = u_x_0.shape
+def get_velocity(args, u_x, u_y):
+  assert u_x.shape == u_y.shape
+  shape = u_x.shape
   nx, ny = shape
   dx = args.Lx / nx
   dy = args.Ly / ny
   step = (dx, dy)
-  domain = ((0, Lx), (0, Ly))
+  domain = ((0, args.Lx), (0, args.Ly))
+
+  ndims = 2
+  bcs = periodic_boundary_conditions(ndims)
   
   grid = Grid(shape, domain=domain)
-  u_x = GridVariable(GridArray(u_x_0, offset=(0.5, 0.0), grid=grid), bcs)
-  u_y = GridVariable(GridArray(u_y_0, offset=(0.0, 0.5), grid=grid), bcs)
+  u_x = GridVariable(GridArray(u_x, grid.cell_faces[0], grid=grid), bcs)
+  u_y = GridVariable(GridArray(u_y, grid.cell_faces[1], grid=grid), bcs)
   return (u_x, u_y)

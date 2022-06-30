@@ -20,7 +20,10 @@ from poissonsolver import get_poisson_solver
 from poissonbracket import get_poisson_bracket
 from diffusion import get_diffusion_func
 from helper import legendre_inner_product, inner_prod_with_legendre
-from baseline import vorticity, get_step_func, simulate_baseline, get_init_velocity, vorticity_to_velocity
+from baseline import vorticity, get_step_func, simulate_baseline, get_velocity, get_forcing
+from plot_data import plot_DG_basis
+import matplotlib.pyplot as plt
+
 
 PI = np.pi
 
@@ -847,6 +850,19 @@ def print_runtime(args, T, flux, unique_id, seed, inner_loop_steps, nx, ny, orde
 # COMPUTE CORRCOEF
 ####################
 
+def vorticity_to_velocity(args, a, f_poisson):
+    H = f_poisson(a)
+    nx, ny, _ = H.shape
+    dx = args.Lx / nx
+    dy = args.Ly / ny
+
+    u_y = -(H[:,:,2] - H[:,:,3]) / dx
+    u_x = (H[:,:,2] - H[:,:,1]) / dy
+    return u_x, u_y
+
+def shift_down_left(a):
+    return (a + np.roll(a, 1, axis=1) + np.roll(a, 1, axis=0) + np.roll(np.roll(a, 1, axis=0), 1, axis=1)) / 4
+
 
 def compute_corrcoef(args, orders, nxs, Tf, Np):
 
@@ -863,13 +879,16 @@ def compute_corrcoef(args, orders, nxs, Tf, Np):
         a0 = f_to_DG(args.nx_max, args.ny_max, args.Lx, args.Ly, args.order_max, f_init, t0, n = 8)
 
 
+
+
     #########
     # burn_in
     #########
     dx_min = args.Lx / (args.nx_max)
     dy_min = args.Ly / (args.ny_max)
     dt_exact = args.cfl_safety * ((dx_min * dy_min) / (dx_min + dy_min)) / (2 * args.order_max + 1)
-    nt_burn_in = int(args.burn_in_time // dt_exact)
+    nt_burn_in = int(args.burn_in_time // dt_exact) + 1
+    dt_exact = args.burn_in_time / nt_burn_in
     
 
     f_poisson_exact = get_poisson_solver(
@@ -928,7 +947,6 @@ def compute_corrcoef(args, orders, nxs, Tf, Np):
         return a_f, t_f
 
     a_burn_in_exact, t_burn_in = sim_exact(a0, t0, nt_burn_in, dt_exact)
-    a_burn_in_exact, t_burn_in = sim_exact(a_burn_in_exact, t_burn_in, 1, args.burn_in_time - t_burn_in)
 
 
 
@@ -940,20 +958,20 @@ def compute_corrcoef(args, orders, nxs, Tf, Np):
 
     assert Np >= 1
 
-    nt_sim_exact = int(T_chunk // dt_exact)
+    nt_sim_exact = int(T_chunk // dt_exact) + 1
+    dt_exact = T_chunk / nt_sim_exact
     a_exact_all = a_burn_in_exact[...,None]
     a_exact = a_burn_in_exact
     t_exact = t_burn_in
 
     for j in range(Np):
         a_exact, t_exact = sim_exact(a_exact, t_exact, nt_sim_exact, dt_exact)
-        a_exact, t_exact = sim_exact(a_exact, t_exact, 1, (j + 1) * T_chunk + args.burn_in_time - t_exact)
         a_exact_all = np.concatenate((a_exact_all, a_exact[...,None]),axis=-1)
 
 
     def print_correlation(a_f, order, nx, ny, j):
         a_e = convert_DG_representation(a_exact_all[...,j][None], order, args.order_max, nx, ny, args.Lx, args.Ly, args.equation)[0]
-        M = np.concatenate([a_f[:,:,0].reshape(-1), a_e[:,:,0].reshape(-1)[:,None]],axis=1)
+        M = np.concatenate([a_f[:,:,0].reshape(-1)[:,None], a_e[:,:,0].reshape(-1)[:,None]],axis=1)
         print("Correlation coefficient for T = {}, order = {}, nx/ny = {} is {}".format(j * T_chunk, order, nx, np.corrcoef(M.T)[0,1]))
 
 
@@ -964,28 +982,40 @@ def compute_corrcoef(args, orders, nxs, Tf, Np):
     ######
     for nx in nxs[0]:
         print("baseline, nx is {}".format(nx))
+        BASELINE_DT_REDUCTION = 2.0
         ny = nx
         dx = args.Lx / (nx)
         dy = args.Ly / (ny)
-        dt0 = args.cfl_safety * ((dx * dy) / (dx + dy))
-        nt_chunk = int(T_chunk // dt0) + 1
+        dt = (args.cfl_safety / BASELINE_DT_REDUCTION) * ((dx * dy) / (dx + dy))
+        nt_chunk = int(T_chunk // dt) + 1
         dt = T_chunk / nt_chunk
-
-        step_func = get_step_func(nx, ny, args.Lx, args.Ly, dt, args.diffusion_coefficient)
+        if args.is_forcing:
+            f_forcing_baseline = get_forcing(args, nx, ny)
+        else:
+            f_forcing_baseline = None
+        step_func = get_step_func(args.diffusion_coefficient, dt, forcing=f_forcing_baseline)
 
         a_burn_in = convert_DG_representation(a_burn_in_exact[None], 0, args.order_max, nx, ny, args.Lx, args.Ly, args.equation)[0]
-        u_x_burn_in, u_y_burn_in = vorticity_to_velocity(a_burn_in[...,0])
+        f_poisson_solve = jit(get_poisson_solver(args.poisson_dir, nx, ny, args.Lx, args.Ly, 0))
+        u_x_burn_in, u_y_burn_in = vorticity_to_velocity(args, a_burn_in, f_poisson_solve)
         
-        v_burn_in = get_init_velocity(u_x_burn_in, u_y_burn_in)
+        v_burn_in = get_velocity(args, u_x_burn_in, u_y_burn_in)
 
         v_f = v_burn_in
-        a_f = vorticity(v_f.array.data)[..., None]
-        print_correlation(a_f, 0, nx, ny, 0)
 
-        for j in range(1,Np+1):
+        a_f = shift_down_left(vorticity(v_f))[..., None]
+        plot_DG_basis(nx, ny, args.Lx, args.Ly, 0, a_f, title="baseline, t = {}".format(0))
+        a_e = convert_DG_representation(a_exact_all[...,0][None], 0, args.order_max, nx, ny, args.Lx, args.Ly, args.equation)[0]
+        plot_DG_basis(nx, ny, args.Lx, args.Ly, 0, a_e, title="exact, t = {}".format(Np))
+        for j in range(Np+1):
+            a_f = shift_down_left(vorticity(v_f))[..., None]
+            print_correlation(a_f, 0, nx, ny, j)
             v_f = simulate_baseline(v_f, step_func, nt_chunk)
-            a_f = vorticity(v_f.array.data)[..., None]
-            print_correlation(a_f, 0, nx, ny, 0)
+        a_f = shift_down_left(vorticity(v_f))[..., None]
+        plot_DG_basis(nx, ny, args.Lx, args.Ly, 0, a_f, title="baseline, t = {}".format(Np))
+        a_e = convert_DG_representation(a_exact_all[...,Np][None], 0, args.order_max, nx, ny, args.Lx, args.Ly, args.equation)[0]
+        plot_DG_basis(nx, ny, args.Lx, args.Ly, 0, a_e, title="exact, t = {}".format(Np))
+        plt.show()
 
 
     ###### 
@@ -1004,7 +1034,8 @@ def compute_corrcoef(args, orders, nxs, Tf, Np):
             dx = args.Lx / (nx)
             dy = args.Ly / (ny)
             dt = args.cfl_safety * ((dx * dy) / (dx + dy)) / (2 * order + 1)
-            nt_sim = int(T_chunk // dt)
+            nt_chunk = int(T_chunk // dt) + 1
+            dt = T_chunk / nt_chunk
 
 
 
@@ -1093,9 +1124,7 @@ def compute_corrcoef(args, orders, nxs, Tf, Np):
                 a_burn_in_exact[None], order, args.order_max, nx, ny, args.Lx, args.Ly, args.equation
             )[0]
             a_f, t_f = a_burn_in, t_burn_in
-            print_correlation(a_f, order, nx, ny, 0)
 
-            for j in range(1, Np+1):
-                a_f, t_f = simulate(a_f, t_f, nt_sim, dt)
-                a_f, t_f = simulate(a_f, t_f, 1, (j + 1) * T_chunk + args.burn_in_time - t_f)
+            for j in range(Np+1):
                 print_correlation(a_f, order, nx, ny, j)
+                a_f, t_f = simulate(a_f, t_f, nt_chunk, dt)
