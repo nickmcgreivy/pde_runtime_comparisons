@@ -1041,10 +1041,6 @@ def compute_corrcoef(args, orders, nxs, nxs_baseline, baseline_dt_reductions, Tf
             plt.show()
             """
     
-    
-        
-        
-
 
     ###### 
     # loop through orders and nxs
@@ -1065,10 +1061,7 @@ def compute_corrcoef(args, orders, nxs, nxs_baseline, baseline_dt_reductions, Tf
             nt_chunk = int(T_chunk // dt) + 1
             dt = T_chunk / nt_chunk
 
-
-
             f_poisson_bracket = get_poisson_bracket(args.poisson_dir, order, flux)
-
 
             if args.equation == "advection":
                 f_phi = get_f_phi(key2, args, nx, ny, order)
@@ -1077,24 +1070,8 @@ def compute_corrcoef(args, orders, nxs, nxs_baseline, baseline_dt_reductions, Tf
                     args.poisson_dir, nx, ny, args.Lx, args.Ly, order
                 )
                 f_phi = lambda zeta, t: f_poisson_solve(zeta)
-
-
-            if args.equation == "hw" or args.equation == "hasegawa_wakatani":
-                n0 = f_to_DG(nx, ny, args.Lx, args.Ly, order, f_init, t0, n = 8)
-                f_phi0 = lambda x, y, t: np.sum(
-                    -1
-                    * nabla(lambda x, y: f_init(x, y, t0))(np.asarray([x]), np.asarray([y]))
-                )
-                zeta0 = f_to_DG(nx, ny, args.Lx, args.Ly, order, f_phi0, t0, n = 8)
-                a0 = np.concatenate((zeta0[None], n0[None]))
-            else:
-                a0 = f_to_DG(nx, ny, args.Lx, args.Ly, order, f_init, t0, n = 8)
-
-               
-            if flux == Flux.LEARNED:
-                raise NotImplementedError
-            else:
-                model = None 
+            
+            model = None 
 
 
             if args.diffusion_coefficient > 0.0:
@@ -1156,3 +1133,181 @@ def compute_corrcoef(args, orders, nxs, nxs_baseline, baseline_dt_reductions, Tf
             for j in range(Np+1):
                 print_correlation(a_f, order, nx, ny, j)
                 a_f, t_f = simulate(a_f, t_f, nt_chunk, dt)
+
+
+
+
+
+
+#################################################
+# COMPUTE RUNTIME
+#################################################
+
+
+
+
+def compute_corrcoef(args, orders, nxs, nxs_baseline, baseline_dt_reduction, Tf):
+
+
+    key = jax.random.PRNGKey(args.random_seed)
+    key1, key2 = jax.random.split(key)
+    t0 = 0.0
+
+    ###### init vorticity
+    f_init = get_initial_condition(key1, args)
+    if args.equation == "hw" or args.equation == "hasegawa_wakatani":
+        raise NotImplementedError
+    else:
+        a0 = f_to_DG(args.nx_max, args.ny_max, args.Lx, args.Ly, args.order_max, f_init, t0, n = 8)
+
+
+    def downsample_ux(u_x, F):
+        nx, ny = u_x.shape
+        assert nx % F == 0
+        return np.mean(u_x[F-1::F,:].reshape(nx // F, ny // F, F), axis=2)
+        
+
+    def downsample_uy(u_y, F):
+        nx, ny = u_y.shape
+        assert ny % F == 0
+        return np.mean(u_y[:, F-1::F].reshape(nx // F, F, ny // F), axis=1)
+
+
+    ######
+    # start with baseline implementation
+    ######
+    a_init = convert_DG_representation(a0[None], 0, args.order_max, nxs_baseline[-1], nxs_baseline[-1], args.Lx, args.Ly, args.equation)[0]
+    f_ps_exact = jit(get_poisson_solver(args.poisson_dir, nxs_baseline[-1], nxs_baseline[-1], args.Lx, args.Ly, 0))
+    u_x_init, u_y_init = vorticity_to_velocity(args, a_init, f_ps_exact)
+
+    for nx in nxs_baseline:
+        
+        ny = nx
+        dx = args.Lx / (nx)
+        dy = args.Ly / (ny)
+        dt = (args.cfl_safety / baseline_dt_reduction) * ((dx * dy) / (dx + dy))
+        nt = int(Tf // dt) + 1
+        dt = Tf / nt
+        if args.is_forcing:
+            f_forcing_baseline = get_forcing(args, nx, ny)
+        else:
+            f_forcing_baseline = None
+        step_func = get_step_func(args.diffusion_coefficient, dt, forcing=f_forcing_baseline)
+
+
+        DS_FAC = nxs_baseline[-1] // nx
+        u_x_init_ds = downsample_ux(u_x_init, DS_FAC)
+        u_y_init_ds = downsample_uy(u_y_init, DS_FAC)
+        v_init = get_velocity(args, u_x_init_ds, u_y_init_ds)
+
+        
+        ### time 1
+        t1 = time()
+        _, _ = simulate_baseline(v_init, step_func, nt)
+        t2 = time()
+        _, _ = simulate_baseline(v_init, step_func, nt)
+        t3 = time()
+        print("baseline, Tf = {}, nx = {}, compile time = {:.5f}, second runtime = {:.5f}".format(Tf, nx, (t2 - t1), (t3 - t2)))
+
+
+    ###### 
+    # loop through orders and nxs
+    ######
+
+    for o, order in enumerate(orders):
+        if order == 0:
+            flux = Flux.VANLEER
+        else:
+            flux = Flux.UPWIND
+
+        for nx in nxs[o]:
+            print("nx is {}".format(nx))
+            ny = nx
+            dx = args.Lx / (nx)
+            dy = args.Ly / (ny)
+            dt = args.cfl_safety * ((dx * dy) / (dx + dy)) / (2 * order + 1)
+            nt = int(Tf // dt) + 1
+            dt = Tf / nt
+            f_poisson_bracket = get_poisson_bracket(args.poisson_dir, order, flux)
+            if args.equation == "advection":
+                f_phi = get_f_phi(key2, args, nx, ny, order)
+            else:
+                f_poisson_solve = get_poisson_solver(
+                    args.poisson_dir, nx, ny, args.Lx, args.Ly, order
+                )
+                f_phi = lambda zeta, t: f_poisson_solve(zeta)
+
+               
+            if flux == Flux.LEARNED:
+                raise NotImplementedError
+            else:
+                model = None 
+
+
+            if args.diffusion_coefficient > 0.0:
+                f_diffusion = get_diffusion_func(order, args.Lx, args.Ly, args.diffusion_coefficient)
+            else:
+                f_diffusion = None
+
+            if args.is_forcing:
+                leg_ip = np.asarray(legendre_inner_product(order))
+                ff = lambda x, y, t: -4 * (2 * PI / args.Ly) * np.cos(4 * (2 * PI / args.Ly) * y)
+                y_term = inner_prod_with_legendre(nx, ny, args.Lx, args.Ly, order, ff, 0.0, n = 8)
+                dx = args.Lx / nx
+                dy = args.Ly / ny
+                f_forcing_sim = lambda zeta: (y_term - dx * dy * args.damping_coefficient * zeta * leg_ip) * args.forcing_coefficient
+            else:
+                f_forcing_sim = None
+
+            @partial(
+                jit,
+                static_argnums=(
+                    2
+                ),
+            )
+            def simulate(a_i, t_i, nt, dt, params=None):
+                model = None
+                
+                return simulate_2D(
+                    a_i,
+                    t_i,
+                    nx,
+                    ny,
+                    args.Lx,
+                    args.Ly,
+                    order,
+                    dt,
+                    nt,
+                    flux,
+                    alpha=args.alpha,
+                    kappa=args.kappa,
+                    model=model,
+                    params=params,
+                    equation=args.equation,
+                    a_data=None,
+                    output=False,
+                    f_phi=f_phi,
+                    f_poisson_bracket=f_poisson_bracket,
+                    f_diffusion=f_diffusion,
+                    f_forcing=f_forcing_sim,
+                    rk=FUNCTION_MAP[args.runge_kutta],
+                    inner_loop_steps=1,
+                )
+
+
+            a_init = convert_DG_representation(
+                a0[None], order, args.order_max, nx, ny, args.Lx, args.Ly, args.equation
+            )[0]
+
+            t1 = time()
+            _, _ = simulate(a_init, t0, nt, dt)
+            t2 = time()
+            _, _ = simulate(a_init, t0, nt, dt)
+            t3 = time()
+            print("order = {}, Tf = {}, nx = {}, compile time = {:.5f}, second runtime = {:.5f}".format(order, Tf, nx, (t2 - t1), (t3 - t2)))
+
+
+
+
+
+

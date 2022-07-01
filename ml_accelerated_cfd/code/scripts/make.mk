@@ -21,7 +21,7 @@ ANALYZE_TEST_SCRIPT = $(SCRIPT_DIR)/analyze_test_data.py
 ANALYZE_EVAL_SCRIPT = $(SCRIPT_DIR)/analyze_eval_data.py
 STABILITY_DATA_SCRIPT = $(SCRIPT_DIR)/generate_stability_data.py
 PLOT_TRAINING_LOSSES_SCRIPT = $(SCRIPT_DIR)/plot_training_losses.py
-COMPUTE_RUNTIME_SCRIPT = $(SCRIPT_DIR)/test_runtime.py
+COMPUTE_RUNTIME_SCRIPT = $(SCRIPT_DIR)/compute_runtime.py
 COMPUTE_CORRCOEF_SCRIPT = $(SCRIPT_DIR)/compute_corrcoef.py
 
 ARGS =  --read_write_dir $(READWRITE_DIR) --train_dir $(TRAIN_DIR) --test_dir $(TEST_DIR) --stability_dir $(STABILITY_DIR) --eval_dir $(EVAL_DIR) --param_dir $(PARAM_DIR) --poisson_dir $(POISSON_DIR) -id $(UNIQUE_ID) $(shell cat $(ARGS_FILE)) 
