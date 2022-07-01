@@ -81,7 +81,7 @@ def plot_FE_basis(
 
 
 def plot_DG_basis(
-    nx, ny, Lx, Ly, order, zeta, plot_lines=False, title="", plotting_density=4
+    nx, ny, Lx, Ly, order, zeta, plot_lines=False, title="", plotting_density=4, vmax=1.0
 ):
     factor = order * plotting_density + 1
     num_elem = zeta.shape[-1]
@@ -110,7 +110,9 @@ def plot_DG_basis(
         y_plot,
         output.T,
         shading="flat",
-        cmap=sns.cm.icefire,  # vmin=0, vmax=1
+        cmap=sns.cm.icefire,
+        vmin=-vmax, 
+        vmax=vmax
     )
     axs.set_xlim([0, Lx])
     axs.set_ylim([0, Ly])

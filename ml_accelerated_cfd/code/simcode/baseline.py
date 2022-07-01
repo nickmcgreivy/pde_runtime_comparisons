@@ -10,7 +10,7 @@ import tree_math
 import functools
 import operator
 import scipy.linalg
-from helper import inner_prod_with_legendre
+from helper import f_to_DG
 
 class BCType:
   PERIODIC = 'periodic'
@@ -954,11 +954,8 @@ def navier_stokes_explicit_terms(viscosity, dt, forcing):
   def _explicit_terms(v):
     dv_dt = convection(v)
     if viscosity > 0.0:
-      print(viscosity)
-      print(diffusion(v, viscosity))
       dv_dt += diffusion(v, viscosity)
     if forcing is not None:
-      print(forcing(v))
       dv_dt += forcing(v)
     return dv_dt
 
@@ -980,22 +977,48 @@ def semi_implicit_navier_stokes(viscosity, dt, pressure_solve, forcing):
   step_fn = forward_euler(ode, dt)
   return step_fn
 
+
+def kolmogorov_forcing(grid, scale, k):
+  offsets = grid.cell_faces
+
+  y = grid.mesh(offsets[0])[1]
+  u = scale * GridArray(jnp.sin(k * y), offsets[0], grid)
+
+  if grid.ndim == 2:
+    v = GridArray(jnp.zeros_like(u.data), (1/2, 1), grid)
+    f = (u, v)
+  else:
+    raise NotImplementedError
+
+  def forcing(v):
+    del v
+    return f
+  return forcing
+
 ###### IMPORT THESE FUNCTIONS
 
-def get_forcing(args, nx, ny):
-  ff = lambda x, y, t: jnp.sin(4 * (2 * np.pi / args.Ly) * y)
+def get_forcing(args, nx, ny, n=8):
   shape = (nx, ny)
-  domain = ((0, args.Lx), (0, args.Ly))
-  grid = Grid(shape, domain=domain)
-  x_term = inner_prod_with_legendre(nx, ny, args.Lx, args.Ly, 0, ff, 0.0, n = 1)[:,:,0]
-  x_term = args.forcing_coefficient * GridArray(x_term, (1, 1/2), grid)
-  y_term = GridArray(jnp.zeros_like(x_term.data), (1/2, 1), grid)
-  constant_term = (x_term, y_term)
   dx = args.Lx / nx
   dy = args.Ly / ny
-  C = args.forcing_coefficient * dx * dy * args.damping_coefficient
+  C = args.forcing_coefficient * args.damping_coefficient
+  domain = ((0, args.Lx), (0, args.Ly))
+  grid = Grid(shape, domain=domain)
+  
+  """
+  ff = lambda x, y, t: -jnp.sin(4 * (2 * np.pi / args.Ly) * y)
+  x_term = f_to_DG(nx, ny, args.Lx, args.Ly, 0, ff, 0.0, n = n)[:,:,0]
+  x_term = args.forcing_coefficient * GridArray(x_term, grid.cell_faces[0], grid)
+  y_term = GridArray(jnp.zeros_like(x_term.data), grid.cell_faces[1], grid)
+  constant_term = (x_term, y_term)
   def f_forcing(v):
-    return tuple( c_i - C * v_i.array for c_i, v_i in zip(constant_term, v))
+    return tuple(c_i - C * v_i.array for c_i, v_i in zip(constant_term, v))
+  """
+  
+  f_constant_term = kolmogorov_forcing(grid, -args.forcing_coefficient, 4)
+  def f_forcing(v):
+    return tuple(c_i - C * v_i.array for c_i, v_i in zip(f_constant_term(v), v))
+  
 
   return f_forcing
 
@@ -1005,7 +1028,7 @@ def vorticity(v):
   dx, dy = u_x.array.grid.step
   du_y_dx = (jnp.roll(u_y.array.data, -1, axis=0) - u_y.array.data) / dx
   du_x_dy = (jnp.roll(u_x.array.data, -1, axis=1) - u_x.array.data) / dy
-  return (du_y_dx - du_x_dy)
+  return -(du_y_dx - du_x_dy)
 
 
 def get_step_func(nu, dt, pressure_solve = solve_fast_diag, forcing=None):

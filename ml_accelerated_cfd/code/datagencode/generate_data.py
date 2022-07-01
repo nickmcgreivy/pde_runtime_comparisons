@@ -864,7 +864,7 @@ def shift_down_left(a):
     return (a + np.roll(a, 1, axis=1) + np.roll(a, 1, axis=0) + np.roll(np.roll(a, 1, axis=0), 1, axis=1)) / 4
 
 
-def compute_corrcoef(args, orders, nxs, Tf, Np):
+def compute_corrcoef(args, orders, nxs, nxs_baseline, baseline_dt_reductions, Tf, Np):
 
 
     key = jax.random.PRNGKey(args.random_seed)
@@ -888,7 +888,7 @@ def compute_corrcoef(args, orders, nxs, Tf, Np):
     dy_min = args.Ly / (args.ny_max)
     dt_exact = args.cfl_safety * ((dx_min * dy_min) / (dx_min + dy_min)) / (2 * args.order_max + 1)
     nt_burn_in = int(args.burn_in_time // dt_exact) + 1
-    dt_exact = args.burn_in_time / nt_burn_in
+    dt_burn_in = args.burn_in_time / nt_burn_in
     
 
     f_poisson_exact = get_poisson_solver(
@@ -907,7 +907,7 @@ def compute_corrcoef(args, orders, nxs, Tf, Np):
         else:
             leg_ip_exact = np.asarray(legendre_inner_product(args.order_max))
             ffe = lambda x, y, t: -4 * (2 * PI / args.Ly) * np.cos(4 * (2 * PI / args.Ly) * y)
-            y_term_exact = inner_prod_with_legendre(args.nx_max, args.ny_max, args.Lx, args.Ly, args.order_max, ffe, 0.0, n = 2 * args.order_max + 1)
+            y_term_exact = inner_prod_with_legendre(args.nx_max, args.ny_max, args.Lx, args.Ly, args.order_max, ffe, 0.0, n = 8)
             dx_min = args.Lx / args.nx_max
             dy_min = args.Ly / args.ny_max
             f_forcing_exact = lambda zeta: (y_term_exact - dx_min * dy_min * args.damping_coefficient * zeta * leg_ip_exact) * args.forcing_coefficient
@@ -943,10 +943,14 @@ def compute_corrcoef(args, orders, nxs, Tf, Np):
             f_diffusion=f_diffusion_exact,
             f_forcing=f_forcing_exact,
             rk=FUNCTION_MAP[args.runge_kutta],
+            inner_loop_steps=1,
         )
         return a_f, t_f
 
-    a_burn_in_exact, t_burn_in = sim_exact(a0, t0, nt_burn_in, dt_exact)
+    if args.burn_in_time > 0.0:
+        a_burn_in_exact, t_burn_in = sim_exact(a0, t0, nt_burn_in, dt_burn_in)
+    else:
+        a_burn_in_exact, t_burn_in = a0, t0
 
 
 
@@ -972,50 +976,74 @@ def compute_corrcoef(args, orders, nxs, Tf, Np):
     def print_correlation(a_f, order, nx, ny, j):
         a_e = convert_DG_representation(a_exact_all[...,j][None], order, args.order_max, nx, ny, args.Lx, args.Ly, args.equation)[0]
         M = np.concatenate([a_f[:,:,0].reshape(-1)[:,None], a_e[:,:,0].reshape(-1)[:,None]],axis=1)
-        print("Correlation coefficient for T = {}, order = {}, nx/ny = {} is {}".format(j * T_chunk, order, nx, np.corrcoef(M.T)[0,1]))
+        print("Correlation coefficient for T = {:.1f}, order = {}, nx & ny = {} is {}".format(j * T_chunk, order, nx, np.corrcoef(M.T)[0,1]))
 
 
+    def downsample_ux(u_x, F):
+        nx, ny = u_x.shape
+        assert nx % F == 0
+        return np.mean(u_x[F-1::F,:].reshape(nx // F, ny // F, F), axis=2)
+        
 
-    print("About to do baseline comparison")
+    def downsample_uy(u_y, F):
+        nx, ny = u_y.shape
+        assert ny % F == 0
+        return np.mean(u_y[:, F-1::F].reshape(nx // F, F, ny // F), axis=1)
+
     ######
     # start with baseline implementation
     ######
-    for nx in nxs[0]:
-        print("baseline, nx is {}".format(nx))
-        BASELINE_DT_REDUCTION = 2.0
-        ny = nx
-        dx = args.Lx / (nx)
-        dy = args.Ly / (ny)
-        dt = (args.cfl_safety / BASELINE_DT_REDUCTION) * ((dx * dy) / (dx + dy))
-        nt_chunk = int(T_chunk // dt) + 1
-        dt = T_chunk / nt_chunk
-        if args.is_forcing:
-            f_forcing_baseline = get_forcing(args, nx, ny)
-        else:
-            f_forcing_baseline = None
-        step_func = get_step_func(args.diffusion_coefficient, dt, forcing=f_forcing_baseline)
+    for nx in nxs_baseline:
+        for BASELINE_DT_REDUCTION in baseline_dt_reductions:
+            print("baseline, nx is {}, reduction is {}".format(nx, BASELINE_DT_REDUCTION))
+            
+            ny = nx
+            dx = args.Lx / (nx)
+            dy = args.Ly / (ny)
+            dt = (args.cfl_safety / BASELINE_DT_REDUCTION) * ((dx * dy) / (dx + dy))
+            nt_chunk = int(T_chunk // dt) + 1
+            dt = T_chunk / nt_chunk
+            if args.is_forcing:
+                f_forcing_baseline = get_forcing(args, nx, ny)
+            else:
+                f_forcing_baseline = None
+            step_func = get_step_func(args.diffusion_coefficient, dt, forcing=f_forcing_baseline)
 
-        a_burn_in = convert_DG_representation(a_burn_in_exact[None], 0, args.order_max, nx, ny, args.Lx, args.Ly, args.equation)[0]
-        f_poisson_solve = jit(get_poisson_solver(args.poisson_dir, nx, ny, args.Lx, args.Ly, 0))
-        u_x_burn_in, u_y_burn_in = vorticity_to_velocity(args, a_burn_in, f_poisson_solve)
-        
-        v_burn_in = get_velocity(args, u_x_burn_in, u_y_burn_in)
+            a_burn_in = convert_DG_representation(a_burn_in_exact[None], 0, args.order_max, nxs_baseline[-1], nxs_baseline[-1], args.Lx, args.Ly, args.equation)[0]
+            f_ps_exact = jit(get_poisson_solver(args.poisson_dir, nxs_baseline[-1], nxs_baseline[-1], args.Lx, args.Ly, 0))
+            u_x_burn_in, u_y_burn_in = vorticity_to_velocity(args, a_burn_in, f_ps_exact)
 
-        v_f = v_burn_in
 
-        a_f = shift_down_left(vorticity(v_f))[..., None]
-        plot_DG_basis(nx, ny, args.Lx, args.Ly, 0, a_f, title="baseline, t = {}".format(0))
-        a_e = convert_DG_representation(a_exact_all[...,0][None], 0, args.order_max, nx, ny, args.Lx, args.Ly, args.equation)[0]
-        plot_DG_basis(nx, ny, args.Lx, args.Ly, 0, a_e, title="exact, t = {}".format(Np))
-        for j in range(Np+1):
+            DS_FAC = nxs_baseline[-1] // nx
+            u_x_burn_in = downsample_ux(u_x_burn_in, DS_FAC)
+            u_y_burn_in = downsample_uy(u_y_burn_in, DS_FAC)
+            v_burn_in = get_velocity(args, u_x_burn_in, u_y_burn_in)
+            v_f = v_burn_in
+
+            """
+            PLOTMAX = 2.5 * args.amplitude_max
             a_f = shift_down_left(vorticity(v_f))[..., None]
-            print_correlation(a_f, 0, nx, ny, j)
-            v_f = simulate_baseline(v_f, step_func, nt_chunk)
-        a_f = shift_down_left(vorticity(v_f))[..., None]
-        plot_DG_basis(nx, ny, args.Lx, args.Ly, 0, a_f, title="baseline, t = {}".format(Np))
-        a_e = convert_DG_representation(a_exact_all[...,Np][None], 0, args.order_max, nx, ny, args.Lx, args.Ly, args.equation)[0]
-        plot_DG_basis(nx, ny, args.Lx, args.Ly, 0, a_e, title="exact, t = {}".format(Np))
-        plt.show()
+            plot_DG_basis(nx, ny, args.Lx, args.Ly, 0, a_f, title="baseline, t = {}".format(0), plotting_density=1, vmax=PLOTMAX)
+            a_e = convert_DG_representation(a_exact_all[...,0][None], 0, args.order_max, nx, ny, args.Lx, args.Ly, args.equation)[0]
+            plot_DG_basis(nx, ny, args.Lx, args.Ly, 0, a_e, title="exact, t = {}".format(0), plotting_density=1, vmax=PLOTMAX)
+            """
+            
+            for j in range(Np+1):
+                a_f = shift_down_left(vorticity(v_f))[..., None]
+                print_correlation(a_f, 0, nx, ny, j)
+                v_f = simulate_baseline(v_f, step_func, nt_chunk)
+            
+            """
+            a_f = shift_down_left(vorticity(v_f))[..., None]
+            plot_DG_basis(nx, ny, args.Lx, args.Ly, 0, a_f, title="baseline, t = {}".format(Np), plotting_density=1, vmax=PLOTMAX)
+            a_e = convert_DG_representation(a_exact_all[...,Np][None], 0, args.order_max, nx, ny, args.Lx, args.Ly, args.equation)[0]
+            plot_DG_basis(nx, ny, args.Lx, args.Ly, 0, a_e, title="exact, t = {}".format(Np), plotting_density=1, vmax=PLOTMAX)
+            plt.show()
+            """
+    
+    
+        
+        
 
 
     ###### 
@@ -1077,7 +1105,7 @@ def compute_corrcoef(args, orders, nxs, Tf, Np):
             if args.is_forcing:
                 leg_ip = np.asarray(legendre_inner_product(order))
                 ff = lambda x, y, t: -4 * (2 * PI / args.Ly) * np.cos(4 * (2 * PI / args.Ly) * y)
-                y_term = inner_prod_with_legendre(nx, ny, args.Lx, args.Ly, order, ff, 0.0, n = 2 * order + 1)
+                y_term = inner_prod_with_legendre(nx, ny, args.Lx, args.Ly, order, ff, 0.0, n = 8)
                 dx = args.Lx / nx
                 dy = args.Ly / ny
                 f_forcing_sim = lambda zeta: (y_term - dx * dy * args.damping_coefficient * zeta * leg_ip) * args.forcing_coefficient
