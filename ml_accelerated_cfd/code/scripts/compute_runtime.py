@@ -11,7 +11,7 @@ def main():
 	nxs_baseline = [32, 64, 128, 256, 512]
 	baseline_dt_reduction = 8.0
 	
-	compute_corrcoef(args, orders, nxs, nxs_baseline, baseline_dt_reduction, Tf)
+	compute_runtime(args, orders, nxs, nxs_baseline, baseline_dt_reduction, Tf)
 
 
 

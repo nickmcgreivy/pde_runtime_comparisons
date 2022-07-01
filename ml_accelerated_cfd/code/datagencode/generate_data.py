@@ -1146,7 +1146,7 @@ def compute_corrcoef(args, orders, nxs, nxs_baseline, baseline_dt_reductions, Tf
 
 
 
-def compute_corrcoef(args, orders, nxs, nxs_baseline, baseline_dt_reduction, Tf):
+def compute_runtime(args, orders, nxs, nxs_baseline, baseline_dt_reduction, Tf):
 
 
     key = jax.random.PRNGKey(args.random_seed)
