@@ -353,8 +353,8 @@ def plot_data(args, n, directory, unique_id, label):
                 args.Lx,
                 args.Ly,
                 order,
-                -2,
-                2,
+                -1,
+                1,
                 label,
             )
 
@@ -364,8 +364,8 @@ def plot_data(args, n, directory, unique_id, label):
                 args.Lx,
                 args.Ly,
                 order,
-                -2,
-                2,
+                -3,
+                3,
                 label,
             )
 
@@ -393,8 +393,8 @@ def plot_data(args, n, directory, unique_id, label):
                 )
 
     for j, up in enumerate(args.upsampling):
-        axs_i_z[-1, j].set_xlabel("{}".format(up), fontsize=12)
-        axs_f_z[-1, j].set_xlabel("{}".format(up), fontsize=12)
+        axs_i_z[-1, j].set_xlabel("{} x {}".format(args.nx_max // up, args.ny_max // up), fontsize=12)
+        axs_f_z[-1, j].set_xlabel("{} x {}".format(args.nx_max // up, args.ny_max // up), fontsize=12)
         if args.equation == "hw" or args.equation == "hasegawa_wakatani":
             axs_i_n[-1, j].set_xlabel("{}".format(up), fontsize=12)
             axs_f_n[-1, j].set_xlabel("{}".format(up), fontsize=12)
@@ -453,6 +453,8 @@ def movie_data(args, n, T, directory, unique_id, label, plotting_density=2, cmap
         vmin_z, vmax_z, vmin_n, vmax_n = get_minmax_hw(args, n, directory, unique_id)
     else:
         vmin_z, vmax_z = get_minmax(args, n, directory, unique_id)
+        vmin_z = -max(np.abs(vmin_z), np.abs(vmax_z))
+        vmax_z = max(np.abs(vmin_z), np.abs(vmax_z))
 
     def iter_frames():
         f = h5py.File(
@@ -521,7 +523,7 @@ def movie_data(args, n, T, directory, unique_id, label, plotting_density=2, cmap
                 axs_n[i, j].set_aspect(args.Ly / args.Lx)
 
     for j, up in enumerate(args.upsampling):
-        axs_z[-1, j].set_xlabel("{}".format(up), fontsize=12)
+        axs_z[-1, j].set_xlabel("{} x {}".format(args.nx_max // up, args.ny_max // up), fontsize=12)
         if args.equation == "hw" or args.equation == "hasegawa_wakatani":
             axs_n[-1, j].set_xlabel("{}".format(up), fontsize=12)
     for i, order in enumerate(args.orders):

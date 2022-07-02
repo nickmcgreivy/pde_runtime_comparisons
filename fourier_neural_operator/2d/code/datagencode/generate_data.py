@@ -192,11 +192,29 @@ def generate_eval_data(args, data_dir, N, T, flux, unique_id, seed, inner_loop_s
             dy = args.Ly / ny
             nt = int(T / (args.cfl_safety * ((dx * dy) / (dx + dy)) / (2 * order + 1))) + 1
             create_dataset(args, N, data_dir, unique_id, up, order, nx, ny, nt)
+    if args.initial_condition == "fourier_space":
+        a0s = np.zeros((N, 256, 256, 1))
+    else:
+        a0s = np.zeros((N, args.nx_max, args.ny_max, num_elements(args.order_max)))
+    
+    key = key0
+    for n in range(N):
 
+        key, subkey = jax.random.split(key)
+
+        t0 = 0.0
+        if args.initial_condition == "fourier_space":
+            GRF = GaussianRF(2, 256, alpha=2.5, tau=7)
+            a0s = a0s.at[n].set(np.asarray(GRF.sample(1)[0][:,:,None]))
+        else:
+            f_init = get_initial_condition(subkey, args)
+            a0s = a0s.at[n].set(f_to_DG(args.nx_max, args.ny_max, args.Lx, args.Ly, args.order_max, f_init, t0, n = 8))
 
     for order in args.orders:
         for up in args.upsampling:
-            key = key0
+            nx = args.nx_max // up
+            ny = args.ny_max // up
+
 
             f_poisson_bracket = f_poisson_bracket_dict[order]
             f_poisson_solve = f_poisson_solve_dict[order][up]
@@ -213,26 +231,21 @@ def generate_eval_data(args, data_dir, N, T, flux, unique_id, seed, inner_loop_s
             else:
                 f_forcing_sim = None
 
+            key = key0
             for n in range(N):
-
                 key, subkey = jax.random.split(key)
-                t0 = 0.0
-                if args.initial_condition == "fourier_space":
-                    GRF = GaussianRF(2, 256, alpha=2.5, tau=7)
-                    a0 = np.asarray(GRF.sample(1)[0][:,:,None])
-                    a0 = convert_DG_representation(
-                        a0[None], order, 0, nx, ny, args.Lx, args.Ly, args.equation
-                    )[0]
 
+                if args.initial_condition == "fourier_space":
+                    ai = convert_DG_representation(
+                        a0s[n][None], order, 0, nx, ny, args.Lx, args.Ly, args.equation
+                    )[0]
                 else:
-                    f_init = get_initial_condition(subkey, args)
-                    a0 = f_to_DG(args.nx_max, args.ny_max, args.Lx, args.Ly, args.order_max, f_init, t0, n = 8)
-                    a0 = convert_DG_representation(
-                        a0[None], order, args.order_max, nx, ny, args.Lx, args.Ly, args.equation
+                    ai = convert_DG_representation(
+                        a0s[n][None], order, args.order_max, nx, ny, args.Lx, args.Ly, args.equation
                     )[0]
 
                 t1 = time()
-                data = simulate(up, order, f_phi, f_poisson_bracket, f_diffusion, f_forcing_sim, a0, t0)
+                data = simulate(up, order, f_phi, f_poisson_bracket, f_diffusion, f_forcing_sim, ai, t0)
                 t2 = time()
                 print(t2 - t1)
 
