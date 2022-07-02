@@ -13,7 +13,7 @@ config.update("jax_enable_x64", True)
 from basisfunctions import num_elements
 from simulator import simulate_2D
 from rungekutta import FUNCTION_MAP
-from training import get_f_phi, get_initial_condition
+from training import get_f_phi, get_initial_condition, GaussianRF
 from flux import Flux
 from helper import f_to_DG, _evalf_2D_integrate, nabla
 from poissonsolver import get_poisson_solver
@@ -129,14 +129,12 @@ def create_f_diffusion_dict(args):
     return dictionary
 
 def generate_eval_data(args, data_dir, N, T, flux, unique_id, seed, inner_loop_steps):
-    key = jax.random.PRNGKey(seed)
+    del inner_loop_steps
+    key0 = jax.random.PRNGKey(seed)
 
+    assert args.equation == "euler"
     f_poisson_bracket_dict = create_f_poisson_bracket_dict(args, flux)
-    if args.equation == "advection":
-        f_poisson_solve_dict = None
-    else:
-        f_poisson_solve_dict = create_f_poisson_solve_dict(args)
-
+    f_poisson_solve_dict = create_f_poisson_solve_dict(args)
     if args.diffusion_coefficient > 0.0:
         f_diffusion_dict = create_f_diffusion_dict(args)
 
@@ -144,61 +142,26 @@ def generate_eval_data(args, data_dir, N, T, flux, unique_id, seed, inner_loop_s
     @partial(
         jit,
         static_argnums=(
+            0,
             1,
             2,
+            3,
+            4,
+            5,
         ),
     )
-    def simulate(key, up, order, params=None):
-        key1, key2 = jax.random.split(key)
-        f_init = get_initial_condition(key1, args)
+    def simulate(up, order, f_phi, f_poisson_bracket, f_diffusion, f_forcing_sim, a0, t0):
         nx = args.nx_max // up
         ny = args.ny_max // up
         dx = args.Lx / (nx)
         dy = args.Ly / (ny)
         dt = args.cfl_safety * ((dx * dy) / (dx + dy)) / (2 * order + 1)
-        t0 = 0.0
-        nt = int(T / dt / inner_loop_steps)
-
-        dx_min = args.Lx / (args.nx_max)
-        dy_min = args.Ly / (args.ny_max)
-        dt_burn_in = args.cfl_safety * ((dx_min * dy_min) / (dx_min + dy_min)) / (2 * args.order_max + 1)
-        nt_burn_in = int(args.burn_in_time // dt_burn_in)
-
-
-        model = None
-
-
-        a0 = f_to_DG(args.nx_max, args.ny_max, args.Lx, args.Ly, args.order_max, f_init, t0, n = 8)
-
-        f_poisson_bracket = f_poisson_bracket_dict[order]
-        if args.equation == "advection":
-            f_phi = get_f_phi(key2, args, nx, ny, order)
-        else:
-            f_poisson_solve = f_poisson_solve_dict[order][up]
-            f_phi = lambda zeta, t: f_poisson_solve(zeta)
-
-        if args.diffusion_coefficient > 0.0:
-            f_diffusion = f_diffusion_dict[order]
-        else:
-            f_diffusion = None
-
-        if args.is_forcing:
-            leg_ip = np.asarray(legendre_inner_product(order))
-            ff = lambda x, y, t: 0.1 * (np.sin( 2 * np.pi * (x + y) ) + np.cos( 2 * np.pi * (x + y) ))
-            y_term = inner_prod_with_legendre(nx, ny, args.Lx, args.Ly, order, ff, 0.0, n = 2 * order + 1)
-            f_forcing_sim = lambda zeta: y_term
-        else:
-            f_forcing_sim = None
-
-        a_burn_in, t_burn_in = a0, t0
-
-        a_burn_in = convert_DG_representation(
-            a_burn_in[None], order, args.order_max, nx, ny, args.Lx, args.Ly, args.equation
-        )[0]
+        nt = int(T / dt) + 1
+        dt = T / nt
 
         a_data = simulate_2D(
-            a_burn_in,
-            t_burn_in,
+            a0,
+            t0,
             nx,
             ny,
             args.Lx,
@@ -207,8 +170,6 @@ def generate_eval_data(args, data_dir, N, T, flux, unique_id, seed, inner_loop_s
             dt,
             nt-1,
             flux,
-            model=model,
-            params=params,
             equation=args.equation,
             a_data=None,
             output=True,
@@ -217,10 +178,10 @@ def generate_eval_data(args, data_dir, N, T, flux, unique_id, seed, inner_loop_s
             f_diffusion=f_diffusion,
             f_forcing=f_forcing_sim,
             rk=FUNCTION_MAP[args.runge_kutta],
-            inner_loop_steps=inner_loop_steps,
+            inner_loop_steps=1,
         )
-        a_data = np.concatenate((a_burn_in[None], a_data))
-        t_data = t_burn_in + np.arange(nt) * dt
+        a_data = np.concatenate((a0[None], a_data))
+        t_data = t0 + np.arange(nt) * dt
         return {"a": a_data, "t": t_data}
 
     for order in args.orders:
@@ -229,17 +190,49 @@ def generate_eval_data(args, data_dir, N, T, flux, unique_id, seed, inner_loop_s
             ny = args.ny_max // up
             dx = args.Lx / nx
             dy = args.Ly / ny
-            dt = args.cfl_safety * ((dx * dy) / (dx + dy)) / (2 * order + 1)
-            nt = int(T / dt / inner_loop_steps)
+            nt = int(T / (args.cfl_safety * ((dx * dy) / (dx + dy)) / (2 * order + 1))) + 1
             create_dataset(args, N, data_dir, unique_id, up, order, nx, ny, nt)
 
-    for n in range(N):
-        key, subkey = jax.random.split(key)
-        for order in args.orders:
-            for up in args.upsampling:
-                _, params = None, None
+
+    for order in args.orders:
+        for up in args.upsampling:
+            key = key0
+
+            f_poisson_bracket = f_poisson_bracket_dict[order]
+            f_poisson_solve = f_poisson_solve_dict[order][up]
+            f_phi = lambda zeta, t: f_poisson_solve(zeta)
+            if args.diffusion_coefficient > 0.0:
+                f_diffusion = f_diffusion_dict[order]
+            else:
+                f_diffusion = None
+
+            if args.is_forcing:
+                ff = lambda x, y, t: 0.1 * (np.sin( 2 * np.pi * (x + y) ) + np.cos( 2 * np.pi * (x + y) ))
+                y_term = inner_prod_with_legendre(nx, ny, args.Lx, args.Ly, order, ff, 0.0, n = 2 * order + 1)
+                f_forcing_sim = lambda zeta: y_term
+            else:
+                f_forcing_sim = None
+
+            for n in range(N):
+
+                key, subkey = jax.random.split(key)
+                t0 = 0.0
+                if args.initial_condition == "fourier_space":
+                    GRF = GaussianRF(2, 256, alpha=2.5, tau=7)
+                    a0 = np.asarray(GRF.sample(1)[0][:,:,None])
+                    a0 = convert_DG_representation(
+                        a0[None], order, 0, nx, ny, args.Lx, args.Ly, args.equation
+                    )[0]
+
+                else:
+                    f_init = get_initial_condition(subkey, args)
+                    a0 = f_to_DG(args.nx_max, args.ny_max, args.Lx, args.Ly, args.order_max, f_init, t0, n = 8)
+                    a0 = convert_DG_representation(
+                        a0[None], order, args.order_max, nx, ny, args.Lx, args.Ly, args.equation
+                    )[0]
+
                 t1 = time()
-                data = simulate(subkey, up, order, params=params)
+                data = simulate(up, order, f_phi, f_poisson_bracket, f_diffusion, f_forcing_sim, a0, t0)
                 t2 = time()
                 print(t2 - t1)
 
@@ -263,20 +256,23 @@ def compute_percent_error(a1, a2):
 
 #@partial(jit, static_argnums=(0, 1, 2, 3),)
 def compute_error(args, nxs, cfls, Tf, Np, key):
-    key1, _ = jax.random.split(key)
 
-    f_init = get_initial_condition(key1, args)
+    key1, _ = jax.random.split(key)
     t0 = 0.0
-    a0_exact = f_to_DG(args.nx_max, args.ny_max, args.Lx, args.Ly, args.order_max, f_init, t0, n = 8)
     flux = Flux.UPWIND
     order = args.order_max
 
-    cfl_exact = 2.0
+    if args.initial_condition == "fourier_space":
+        GRF = GaussianRF(2, 256, alpha=2.5, tau=7)
+        a0 = np.asarray(GRF.sample(1)[0][:,:,None])
+        a0_exact = convert_DG_representation(
+            a0[None], args.order_max, 0, args.nx_max, args.ny_max, args.Lx, args.Ly, args.equation
+        )[0]
+    else:
+        f_init = get_initial_condition(subkey, args)
+        a0_exact = f_to_DG(args.nx_max, args.ny_max, args.Lx, args.Ly, args.order_max, f_init, t0, n = 8)
 
 
-    dx_min = args.Lx / (args.nx_max)
-    dy_min = args.Ly / (args.ny_max)
-    dt_exact = cfl_exact * ((dx_min * dy_min) / (dx_min + dy_min)) / (2 * args.order_max + 1)
     f_poisson_exact = get_poisson_solver(
         args.poisson_dir, args.nx_max, args.ny_max, args.Lx, args.Ly, args.order_max
     )
@@ -332,14 +328,19 @@ def compute_error(args, nxs, cfls, Tf, Np, key):
 
     assert Np >= 1
 
-    nt_sim_exact = int(T_chunk // dt_exact)
+    dx_min = args.Lx / (args.nx_max)
+    dy_min = args.Ly / (args.ny_max)
+    cfl_exact = 4.0
+    dt_exact = cfl_exact * ((dx_min * dy_min) / (dx_min + dy_min)) / (2 * args.order_max + 1)
+    nt_sim_exact = int(T_chunk // dt_exact) + 1
+    dt_exact = T_chunk / nt_sim_exact
+
     a_exact_all = a0_exact[...,None]
     a_exact = a0_exact
     t_exact = t0
 
     for j in range(Np):
         a_exact, t_exact = sim_exact(a_exact, t_exact, nt_sim_exact, dt_exact)
-        a_exact, t_exact = sim_exact(a_exact, t_exact, 1, (j + 1) * T_chunk + args.burn_in_time - t_exact)
         a_exact_all = np.concatenate((a_exact_all, a_exact[...,None]),axis=-1)
 
 
@@ -351,7 +352,8 @@ def compute_error(args, nxs, cfls, Tf, Np, key):
         dx = args.Lx / (nx)
         dy = args.Ly / (ny)
         dt = cfls[n] * ((dx * dy) / (dx + dy)) / (2 * order + 1)
-        nt_sim = int(T_chunk // dt)
+        nt_sim = int(T_chunk // dt) + 1
+        dt = T_chunk / nt_sim
 
 
 
@@ -369,7 +371,6 @@ def compute_error(args, nxs, cfls, Tf, Np, key):
             f_diffusion = None
 
         if args.is_forcing:
-            leg_ip = np.asarray(legendre_inner_product(order))
             ff = lambda x, y, t: 0.1 * (np.sin( 2 * np.pi * (x + y) ) + np.cos( 2 * np.pi * (x + y) ))
             y_term = inner_prod_with_legendre(nx, ny, args.Lx, args.Ly, order, ff, 0.0, n = 8)
             f_forcing_sim = lambda zeta: y_term
@@ -420,7 +421,6 @@ def compute_error(args, nxs, cfls, Tf, Np, key):
 
         for j in range(Np):
             a_f, t_f = simulate(a_f, t_f, nt_sim, dt)
-            a_f, t_f = simulate(a_f, t_f, 1, (j + 1) * T_chunk + args.burn_in_time - t_f)
             a_e = convert_DG_representation(
                 a_exact_all[...,j+1][None], order, args.order_max, nx, ny, args.Lx, args.Ly, args.equation
             )[0]

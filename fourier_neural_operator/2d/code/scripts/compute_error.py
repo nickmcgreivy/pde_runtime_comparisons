@@ -9,16 +9,14 @@ def main():
 	args = get_args()
 
 
-
 	nxs = [8, 16, 32]
-	cfls = [4.0, 4.0, 4.0]
+	cfls = [6.0, 4.0, 4.0]
 	Tf = args.evaluation_time
 	Np = int(Tf)
 	key = jax.random.PRNGKey(args.random_seed)
 
 
-
-	for _ in range(4):
+	for _ in range(10):
 		key, subkey = jax.random.split(key)
 		errors = compute_error(args, nxs, cfls, Tf, Np, subkey)
 
