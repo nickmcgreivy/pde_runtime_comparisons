@@ -7,6 +7,9 @@ PYTHONPATH=$(BASEDIR)/scripts:$(BASEDIR)/code
 
 export BASEDIR READWRITE_DIR POISSON_DIR PYTHONPATH
 
+demo_dg_code:
+	make -f $(MAKE_SCRIPT) demo_dg_code
+
 compute_runtime:
 	make -f $(MAKE_SCRIPT) compute_runtime
 
@@ -17,4 +20,4 @@ plot_accuracy_runtime:
 	make -f $(MAKE_SCRIPT) plot_accuracy_runtime
 
 print_FNO_statistics:
-	make -f $(MAKE_SCRIPT) print_FNO_statistics
+	make -f $(MAKE_SCRIPT) print_fno_statistics

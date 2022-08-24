@@ -2,6 +2,7 @@ Need to download:
 
 pybind11
 jax
+sympy
 
 cd code/generate_sparse_solve
 tar -xvf eigen-3.4.0.tar.bz2 
