@@ -13,7 +13,6 @@ def time_derivative_2d_navier_stokes(
     else:
         diffusion_term = 0.0
     
-
     return (
         (f_poisson_bracket(zeta, phi) + forcing_term + diffusion_term)
         / denominator[None, None, :]

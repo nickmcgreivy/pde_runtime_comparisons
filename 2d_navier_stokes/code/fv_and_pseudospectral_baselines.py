@@ -997,12 +997,12 @@ def kolmogorov_forcing(grid, scale, k):
 
 ###### IMPORT THESE FUNCTIONS
 
-def get_forcing(args, nx, ny, n=8):
+def get_forcing(Lx, Ly, forcing_coefficient, damping_coefficient, nx, ny, n=8):
   shape = (nx, ny)
-  dx = args.Lx / nx
-  dy = args.Ly / ny
-  C = args.forcing_coefficient * args.damping_coefficient
-  domain = ((0, args.Lx), (0, args.Ly))
+  dx = Lx / nx
+  dy = Ly / ny
+  C = forcing_coefficient * damping_coefficient
+  domain = ((0, Lx), (0, Ly))
   grid = Grid(shape, domain=domain)
   
   """
@@ -1035,7 +1035,7 @@ def get_step_func(nu, dt, pressure_solve = solve_fast_diag, forcing=None):
   return semi_implicit_navier_stokes(nu, dt, pressure_solve, forcing)
 
 @functools.partial(jax.jit, static_argnums=(1, 2))
-def simulate_baseline(v, step_func, nt):
+def simulate_fv_baseline(v, step_func, nt):
   def _scanf(v, x):
     return step_func(v), None
   vf, _ = jax.lax.scan(_scanf, v, None, length=nt)
@@ -1057,3 +1057,14 @@ def get_velocity(args, u_x, u_y):
   u_x = GridVariable(GridArray(u_x, grid.cell_faces[0], grid=grid), bcs)
   u_y = GridVariable(GridArray(u_y, grid.cell_faces[1], grid=grid), bcs)
   return (u_x, u_y)
+
+def downsample_ux(u_x, F):
+  nx, ny = u_x.shape
+  assert nx % F == 0
+  return jnp.mean(u_x[F-1::F,:].reshape(nx // F, ny // F, F), axis=2)
+    
+
+def downsample_uy(u_y, F):
+  nx, ny = u_y.shape
+  assert ny % F == 0
+  return jnp.mean(u_y[:, F-1::F].reshape(nx // F, F, ny // F), axis=1)
