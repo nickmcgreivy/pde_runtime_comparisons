@@ -2,7 +2,7 @@ BASEDIR=/Users/nickm/thesis/metareview/pde_runtime_comparisons/2d_navier_stokes
 READWRITE_DIR=/Users/nickm/thesis/metareview/pde_runtime_comparisons/2d_navier_stokes
 
 POISSON_DIR=$(BASEDIR)
-MAKE_SCRIPT=$(SCRIPT_DIR)/make.mk
+MAKE_SCRIPT=$(BASEDIR)/scripts/make.mk
 PYTHONPATH=$(BASEDIR)/scripts:$(BASEDIR)/code
 
 export BASEDIR READWRITE_DIR POISSON_DIR PYTHONPATH

@@ -1015,7 +1015,7 @@ def get_forcing(Lx, Ly, forcing_coefficient, damping_coefficient, nx, ny, n=8):
     return tuple(c_i - C * v_i.array for c_i, v_i in zip(constant_term, v))
   """
   
-  f_constant_term = kolmogorov_forcing(grid, -args.forcing_coefficient, 4)
+  f_constant_term = kolmogorov_forcing(grid, -forcing_coefficient, 4)
   def f_forcing(v):
     return tuple(c_i - C * v_i.array for c_i, v_i in zip(f_constant_term(v), v))
   
@@ -1041,14 +1041,14 @@ def simulate_fv_baseline(v, step_func, nt):
   vf, _ = jax.lax.scan(_scanf, v, None, length=nt)
   return vf
 
-def get_velocity(args, u_x, u_y):
+def get_velocity(Lx, Ly, u_x, u_y):
   assert u_x.shape == u_y.shape
   shape = u_x.shape
   nx, ny = shape
-  dx = args.Lx / nx
-  dy = args.Ly / ny
+  dx = Lx / nx
+  dy = Ly / ny
   step = (dx, dy)
-  domain = ((0, args.Lx), (0, args.Ly))
+  domain = ((0, Lx), (0, Ly))
 
   ndims = 2
   bcs = periodic_boundary_conditions(ndims)

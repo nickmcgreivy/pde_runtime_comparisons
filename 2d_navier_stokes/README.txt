@@ -4,6 +4,7 @@ pybind11
 jax
 sympy
 h5py
+tree_math
 
 cd code/generate_sparse_solve
 tar -xvf eigen-3.4.0.tar.bz2 

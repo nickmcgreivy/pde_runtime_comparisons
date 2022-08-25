@@ -1,5 +1,6 @@
+import jax
 import jax.numpy as np
-from jax import jit, config
+from jax import jit, vmap, config
 import h5py
 from functools import partial
 from time import time
@@ -7,7 +8,8 @@ config.update("jax_enable_x64", True)
 
 from arguments import get_args
 from flux import Flux
-from helper import f_to_DG
+from rungekutta import FUNCTION_MAP
+from helper import f_to_DG, _evalf_2D_integrate, legendre_inner_product, inner_prod_with_legendre
 from poissonsolver import get_poisson_solver
 from poissonbracket import get_poisson_bracket
 from diffusion import get_diffusion_func
@@ -53,16 +55,16 @@ def get_initial_condition(key):
 			axis=1,
 		)
 
-	key1, key2, key3, key4, key5 = random.split(key, 5)
-	phases_x = random.uniform(key1, (num_init_modes,)) * 2 * PI
-	phases_y = random.uniform(key2, (num_init_modes,)) * 2 * PI
-	ks_x = random.randint(
+	key1, key2, key3, key4, key5 = jax.random.split(key, 5)
+	phases_x = jax.random.uniform(key1, (num_init_modes,)) * 2 * PI
+	phases_y = jax.random.uniform(key2, (num_init_modes,)) * 2 * PI
+	ks_x = jax.random.randint(
 		key3, (num_init_modes,), min_k, max_k
 	)
-	ks_y = random.randint(
+	ks_y = jax.random.randint(
 		key4, (num_init_modes,), min_k, max_k
 	)
-	amplitudes = random.uniform(key5, (num_init_modes,)) * amplitude_max
+	amplitudes = jax.random.uniform(key5, (num_init_modes,)) * amplitude_max
 	return lambda x, y, t: sum_modes(x, y, amplitudes, ks_x, ks_y, phases_x, phases_y)
 
 
@@ -126,10 +128,10 @@ def compute_runtime(args, random_seed, orders, nxs, nxs_baseline, baseline_dt_re
 
 	key = jax.random.PRNGKey(random_seed)
 	key1, key2 = jax.random.split(key)
-	f_init = get_initial_condition(key1, args)
+	f_init = get_initial_condition(key1)
 
-	a0 = f_to_DG(nx_max, ny_max, Lx, Ly, order_max, f_init, t0, n = 8)
 	t0 = 0.0
+	a0 = f_to_DG(nx_max, ny_max, Lx, Ly, order_max, f_init, t0, n = 8)
 
 	######
 	# start with fv baseline implementation
@@ -153,7 +155,7 @@ def compute_runtime(args, random_seed, orders, nxs, nxs_baseline, baseline_dt_re
 		DS_FAC = nxs_baseline[-1] // nx
 		u_x_init_ds = downsample_ux(u_x_init, DS_FAC)
 		u_y_init_ds = downsample_uy(u_y_init, DS_FAC)
-		v_init = get_velocity(u_x_init_ds, u_y_init_ds)
+		v_init = get_velocity(Lx, Ly, u_x_init_ds, u_y_init_ds)
 
 		
 		### time 1
@@ -164,14 +166,14 @@ def compute_runtime(args, random_seed, orders, nxs, nxs_baseline, baseline_dt_re
 		t3 = time()
 		_, _ = simulate_fv_baseline(v_init, step_func, nt)
 		t4 = time()
-		 _, _ = simulate_fv_baseline(v_init, step_func, nt)
+		_, _ = simulate_fv_baseline(v_init, step_func, nt)
 		t5 = time()
 		T1 = t2 - t1
 		T2 = t3 - t2
 		T3 = t4 - t3
 		T4 = t5 - t4
 		print("baseline, Tf = {}, nx = {}\ncompile time = {:.5f}\nsecond runtime = {:.5f}\nthird runtime = {:.5f}\nfourth runtime = {:.5f}\n".format(Tf, nx, T1, T2, T3, T4))
-		T_fv_baseline = np.mean([T2, T3, T4])
+		T_fv_baseline = np.mean(np.asarray([T2, T3, T4]))
 		# TODO: save to file
 
 	###### 
@@ -205,8 +207,7 @@ def compute_runtime(args, random_seed, orders, nxs, nxs_baseline, baseline_dt_re
 					2
 				),
 			)
-			def simulate(a_i, t_i, nt, dt, params=None):
-				model = None
+			def simulate(a_i, t_i, nt, dt):
 				
 				return simulate_2D(
 					a_i,
@@ -219,14 +220,13 @@ def compute_runtime(args, random_seed, orders, nxs, nxs_baseline, baseline_dt_re
 					dt,
 					nt,
 					flux,
+					f_poisson_bracket,
+					f_phi,
 					a_data=None,
 					output=False,
-					f_phi=f_phi,
-					f_poisson_bracket=f_poisson_bracket,
 					f_diffusion=f_diffusion,
 					f_forcing=f_forcing_sim,
 					rk=FUNCTION_MAP[runge_kutta],
-					inner_loop_steps=1,
 				)
 
 
@@ -248,7 +248,7 @@ def compute_runtime(args, random_seed, orders, nxs, nxs_baseline, baseline_dt_re
 			T3 = t4 - t3
 			T4 = t5 - t4
 			print("order = {}, Tf = {}, nx = {}\ncompile time = {:.5f}\nsecond runtime = {:.5f}\nthird runtime = {:.5f}\nfourth runtime = {:.5f}\n".format(order, Tf, nx, T1, T2, T3, T4))
-			T_dg_baseline = np.mean([T2, T3, T4])
+			T_dg_baseline = np.mean(np.asarray([T2, T3, T4]))
 			# TODO: save to file
 
 
