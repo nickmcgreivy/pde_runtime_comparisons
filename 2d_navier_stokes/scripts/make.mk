@@ -7,9 +7,6 @@ PRINT_FNO_STATISTICS_SCRIPT = $(BASEDIR)/scripts/print_fno_statistics_script.py
 
 ARGS = --poisson_dir $(POISSON_DIR) --read_write_dir $(READWRITE_DIR)
 
-demo_dg_code:
-	python $(DG_PLOT_SIM) $(ARGS)
-
 compute_runtime :
 	python $(COMPUTE_RUNTIME_SCRIPT) $(ARGS)
 

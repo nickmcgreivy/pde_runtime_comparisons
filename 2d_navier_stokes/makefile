@@ -7,8 +7,6 @@ PYTHONPATH=$(BASEDIR)/scripts:$(BASEDIR)/code
 
 export BASEDIR READWRITE_DIR POISSON_DIR PYTHONPATH
 
-demo_dg_code:
-	make -f $(MAKE_SCRIPT) demo_dg_code
 
 compute_runtime:
 	make -f $(MAKE_SCRIPT) compute_runtime

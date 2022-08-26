@@ -40,14 +40,16 @@ num_init_modes = 6
 amplitude_max = 4.0
 orders = [0, 1, 2]
 nxs = [[32, 64, 128], [32, 48, 64], [16, 32, 48, 64]]
-nxs_baseline = [32, 64, 128]
-baseline_dt_reductions = [4.0, 6.0, 8.0]
-Np = 100
+nxs_fv_baseline = [32, 64, 128]
+baseline_dt_reductions = [8.0]
 exact_flux = Flux.UPWIND
 
 
-Tf = 2.0
-burn_in_time = 1.0
+Tf = 10.0
+Np = int(Tf * 10)
+burn_in_time = 10.0
+T_runtime = 1.0
+N_compute_runtime = 5
 N_test = 1 # change to 5 or 10
 
 ################
@@ -90,27 +92,40 @@ def get_forcing_dg(order, nx, ny, Lx, Ly, damping_coefficient, forcing_coefficie
 
 
 def create_corr_file(n, args):
+	# 
 	f = h5py.File(
-		"{}/data/corr_run{}.hdf5".format(args.read_write_dir, n),
+		"{}/data/corr_run{}_fv.hdf5".format(args.read_write_dir, n),
 		"w",
 	)
-	dset_new = f.create_dataset("fv", (Np,), dtype="float64")
-	dset_new = f.create_dataset("ps", (Np,), dtype="float64")
-	dset_new = f.create_dataset("order0", (Np,), dtype="float64")
-	dset_new = f.create_dataset("order1", (Np,), dtype="float64")
-	dset_new = f.create_dataset("order2", (Np,), dtype="float64")
+	for nx in nxs_fv_baseline:
+		dset_new = f.create_dataset(str(nx), (Np+1,), dtype="float64")
 	f.close()
 
-def write_corr_file(n, args, name, j, value):
+	for o, order in enumerate(orders):
+		f = h5py.File(
+			"{}/data/corr_run{}_order{}.hdf5".format(args.read_write_dir, n, order),
+			"w",
+		)
+		for nx in nxs[o]:
+			dset_new = f.create_dataset(str(nx), (Np+1,), dtype="float64")
+		f.close()
+
+
+def write_corr_file(n, args, name, nx, j, value):
 	f = h5py.File(
-		"{}/data/corr_run{}.hdf5".format(args.read_write_dir, n),
+		"{}/data/corr_run{}_{}.hdf5".format(args.read_write_dir, n, name),
 		"r+",
 	)
-	f[name][j] = value
+	f[str(nx)][j] = value
 	f.close()
 
 
-def compute_corrcoef(n, args, key, orders, nxs, nxs_baseline, baseline_dt_reductions, Tf, Np):
+def shift_down_left(a):
+    return (a + np.roll(a, 1, axis=1) + np.roll(a, 1, axis=0) + np.roll(np.roll(a, 1, axis=0), 1, axis=1)) / 4
+
+
+
+def compute_corrcoef(n, args, key, orders, nxs, nxs_fv_baseline, baseline_dt_reductions, Tf, Np):
 
 	create_corr_file(n, args)
 
@@ -174,13 +189,13 @@ def compute_corrcoef(n, args, key, orders, nxs, nxs_baseline, baseline_dt_reduct
 		M = np.concatenate([a_f[:,:,0].reshape(-1)[:,None], a_e[:,:,0].reshape(-1)[:,None]],axis=1)
 		corrcoeff_j = np.corrcoef(M.T)[0,1]
 		print("Run: {}, {}, nx = {}, T = {:.1f}, corr = {}".format(n, name, nx, j * T_chunk, corrcoeff_j))
-		write_corr_file(n, args, name, j, corrcoeff_j)
+		write_corr_file(n, args, name, nx, j, corrcoeff_j)
 
 	
 	######
 	# start with baseline implementation
 	######
-	for nx in nxs_baseline:
+	for nx in nxs_fv_baseline:
 		for BASELINE_DT_REDUCTION in baseline_dt_reductions:
 			print("baseline, nx is {}, reduction is {}".format(nx, BASELINE_DT_REDUCTION))
 			
@@ -190,25 +205,25 @@ def compute_corrcoef(n, args, key, orders, nxs, nxs_baseline, baseline_dt_reduct
 			dt = (cfl_safety / BASELINE_DT_REDUCTION) * ((dx * dy) / (dx + dy))
 			nt_chunk = int(T_chunk // dt) + 1
 			dt = T_chunk / nt_chunk
-			f_forcing_baseline = get_forcing(Lx, Ly, nx, ny)
+			f_forcing_baseline = get_forcing(Lx, Ly, forcing_coefficient, damping_coefficient, nx, ny)
 			step_func = get_step_func(diffusion_coefficient, dt, forcing=f_forcing_baseline)
 
-			a_burn_in = convert_DG_representation(a_burn_in_exact[None], 0, order_max, nxs_baseline[-1], nxs_baseline[-1], Lx, Ly)[0]
-			f_ps_exact = jit(get_poisson_solver(args.poisson_dir, nxs_baseline[-1], nxs_baseline[-1], Lx, Ly, 0))
-			u_x_burn_in, u_y_burn_in = vorticity_to_velocity(args, a_burn_in, f_ps_exact)
+			a_burn_in = convert_DG_representation(a_burn_in_exact[None], 0, order_max, nxs_fv_baseline[-1], nxs_fv_baseline[-1], Lx, Ly)[0]
+			f_ps_exact = jit(get_poisson_solver(args.poisson_dir, nxs_fv_baseline[-1], nxs_fv_baseline[-1], Lx, Ly, 0))
+			u_x_burn_in, u_y_burn_in = vorticity_to_velocity(Lx, Ly, a_burn_in, f_ps_exact)
 
 
-			DS_FAC = nxs_baseline[-1] // nx
+			DS_FAC = nxs_fv_baseline[-1] // nx
 			u_x_burn_in = downsample_ux(u_x_burn_in, DS_FAC)
 			u_y_burn_in = downsample_uy(u_y_burn_in, DS_FAC)
-			v_burn_in = get_velocity(args, u_x_burn_in, u_y_burn_in)
+			v_burn_in = get_velocity(Lx, Ly, u_x_burn_in, u_y_burn_in)
 			v_f = v_burn_in
 
 			
 			for j in range(Np+1):
 				a_f = shift_down_left(vorticity(v_f))[..., None]
 				store_correlation(a_f, 0, nx, ny, "fv", j)
-				v_f = simulate_baseline(v_f, step_func, nt_chunk)
+				v_f = simulate_fv_baseline(v_f, step_func, nt_chunk)
 
 	
 
@@ -243,7 +258,7 @@ def compute_corrcoef(n, args, key, orders, nxs, nxs_baseline, baseline_dt_reduct
 					2
 				),
 			)
-			def simulate(a_i, t_i, nt, dt, params=None):
+			def simulate(a_i, t_i, nt, dt):
 				return simulate_2D(
 					a_i,
 					t_i,
@@ -254,14 +269,13 @@ def compute_corrcoef(n, args, key, orders, nxs, nxs_baseline, baseline_dt_reduct
 					order,
 					dt,
 					nt,
-					flux,
 					f_poisson_bracket,
 					f_phi,
 					a_data=None,
 					output=False,
 					f_diffusion=f_diffusion,
 					f_forcing=f_forcing_sim,
-					rk=FUNCTION_MAP[args.runge_kutta],
+					rk=FUNCTION_MAP[runge_kutta],
 				)
 
 
@@ -284,10 +298,10 @@ def main():
 
 	for n in range(N_test):
 		key, _ = jax.random.split(key)
-		compute_corrcoef(n, args, key, orders, nxs, nxs_baseline, baseline_dt_reductions, Tf, Np)
+		compute_corrcoef(n, args, key, orders, nxs, nxs_fv_baseline, baseline_dt_reductions, Tf, Np)
 
 	#nxs = [[32, 48, 64, 96, 128, 192, 256], [16, 24, 32, 48, 64, 96, 128], [16, 24, 32, 48, 64, 96]]
-	#nxs_baseline = [32, 64, 128, 256, 512]
+	#nxs_fv_baseline = [32, 64, 128, 256, 512]
 	
 
 

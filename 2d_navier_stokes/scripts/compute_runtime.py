@@ -38,12 +38,13 @@ max_k = 5
 min_k = 1
 num_init_modes = 6
 amplitude_max = 4.0
-N_test = 5
 orders = [0, 1, 2]
 nxs = [[32, 64, 128], [32, 48, 64], [16, 32, 48]]
-nxs_baseline = [32, 64, 128]
-baseline_dt_reduction = 6.0
-Tf = 1.0
+nxs_fv_baseline = [32, 64, 128]
+baseline_dt_reduction = 8.0
+T_runtime = 1.0
+N_compute_runtime = 5
+N_test = 1 # change to 5 or 10
 
 ################
 # END PARAMETERS
@@ -84,7 +85,28 @@ def get_forcing_dg(order, nx, ny, Lx, Ly, damping_coefficient, forcing_coefficie
 	return lambda zeta: (y_term - dx * dy * damping_coefficient * zeta * leg_ip) * forcing_coefficient
 
 
-def compute_runtime(args, random_seed, device, orders, nxs, nxs_baseline, baseline_dt_reduction, Tf):
+def create_datasets(args, device):
+	f = h5py.File(
+		"{}/data/{}_fv.hdf5".format(args.read_write_dir, device),
+		"w",
+	)
+	for nx in nxs_fv_baseline:
+		dset_a = f.create_dataset(str(nx), (1,), dtype="float64")
+	f.close()
+	for o, order in enumerate(orders):
+		f = h5py.File(
+			"{}/data/{}_order{}.hdf5".format(args.read_write_dir, device, order),
+			"w",
+		)
+		for nx in nxs[o]:
+			dset_a = f.create_dataset(str(nx), (1,), dtype="float64")
+		f.close()
+
+
+
+def compute_runtime(args, random_seed, device, orders, nxs, nxs_fv_baseline, baseline_dt_reduction, Tf):
+
+	create_datasets(args, device)
 
 	key = jax.random.PRNGKey(random_seed)
 	key1, key2 = jax.random.split(key)
@@ -96,11 +118,11 @@ def compute_runtime(args, random_seed, device, orders, nxs, nxs_baseline, baseli
 	######
 	# start with fv baseline implementation
 	######
-	a_init = convert_DG_representation(a0[None], 0, order_max, nxs_baseline[-1], nxs_baseline[-1], Lx, Ly)[0]
-	f_ps_exact = jit(get_poisson_solver(args.poisson_dir, nxs_baseline[-1], nxs_baseline[-1], Lx, Ly, 0))
+	a_init = convert_DG_representation(a0[None], 0, order_max, nxs_fv_baseline[-1], nxs_fv_baseline[-1], Lx, Ly)[0]
+	f_ps_exact = jit(get_poisson_solver(args.poisson_dir, nxs_fv_baseline[-1], nxs_fv_baseline[-1], Lx, Ly, 0))
 	u_x_init, u_y_init = vorticity_to_velocity(Lx, Ly, a_init, f_ps_exact)
 
-	for nx in nxs_baseline:
+	for nx in nxs_fv_baseline:
 		
 		ny = nx
 		dx = Lx / (nx)
@@ -112,15 +134,15 @@ def compute_runtime(args, random_seed, device, orders, nxs, nxs_baseline, baseli
 		step_func = get_step_func(diffusion_coefficient, dt, forcing=f_forcing_baseline)
 
 
-		DS_FAC = nxs_baseline[-1] // nx
+		DS_FAC = nxs_fv_baseline[-1] // nx
 		u_x_init_ds = downsample_ux(u_x_init, DS_FAC)
 		u_y_init_ds = downsample_uy(u_y_init, DS_FAC)
 		v_init = get_velocity(Lx, Ly, u_x_init_ds, u_y_init_ds)
 
-		times = onp.zeros(N_test)
+		times = onp.zeros(N_compute_runtime)
 		ux, uy = simulate_fv_baseline(v_init, step_func, nt)
 		ux.array.data.block_until_ready()
-		for n in range(N_test):
+		for n in range(N_compute_runtime):
 			t1 = time()
 			ux, uy = simulate_fv_baseline(v_init, step_func, nt)
 			ux.array.data.block_until_ready()
@@ -130,10 +152,10 @@ def compute_runtime(args, random_seed, device, orders, nxs, nxs_baseline, baseli
 		print("FV baseline, Tf = {}, nx = {}".format(Tf, nx))
 		print("runtimes: {}".format(times))
 		f = h5py.File(
-			"{}/data/{}_FVbaseline.hdf5".format(args.read_write_dir, device),
-			"w",
+			"{}/data/{}_fv.hdf5".format(args.read_write_dir, device),
+			"r+",
 		)
-		f[nx] = np.median(times)
+		f[str(nx)][0] = np.median(times)
 		f.close()
 
 	###### 
@@ -185,10 +207,10 @@ def compute_runtime(args, random_seed, device, orders, nxs, nxs_baseline, baseli
 			a_init = convert_DG_representation(a0[None], order, order_max, nx, ny, Lx, Ly)[0]
 
 
-			times = onp.zeros(N_test)
+			times = onp.zeros(N_compute_runtime)
 			a_final, _ = simulate(a_init, t0, nt, dt)
 			a_final.block_until_ready()
-			for n in range(N_test):
+			for n in range(N_compute_runtime):
 				t1 = time()
 				a_final, _ = simulate(a_init, t0, nt, dt)
 				a_final.block_until_ready()
@@ -199,9 +221,9 @@ def compute_runtime(args, random_seed, device, orders, nxs, nxs_baseline, baseli
 			print("runtimes: {}".format(times))
 			f = h5py.File(
 				"{}/data/{}_order{}.hdf5".format(args.read_write_dir, device, order),
-				"w",
+				"r+",
 			)
-			f[nx] = np.median(times)
+			f[str(nx)][0] = np.median(times)
 			f.close()
 
 
@@ -216,7 +238,7 @@ def main():
 
 	random_seed = 42
 
-	compute_runtime(args, random_seed, device, orders, nxs, nxs_baseline, baseline_dt_reduction, Tf)
+	compute_runtime(args, random_seed, device, orders, nxs, nxs_fv_baseline, baseline_dt_reduction, T_runtime)
 	
 
 if __name__ == '__main__':
