@@ -7,7 +7,6 @@ from timederivative import time_derivative_2d_navier_stokes
 from rungekutta import ssp_rk3
 from basisfunctions import legendre_inner_product
 from helper import inner_prod_with_legendre
-from flux import Flux
 
 PI = np.pi
 
@@ -42,7 +41,6 @@ def simulate_2D(
     order,
     dt,
     nt,
-    flux,
     f_poisson_bracket,
     f_phi,
     a_data=None,
@@ -58,8 +56,10 @@ def simulate_2D(
     leg_ip = np.asarray(legendre_inner_product(order))
     denominator = leg_ip * dx * dy
 
-    dadt = lambda a, t: time_derivative_2d_navier_stokes(a, t, f_poisson_bracket, f_phi, denominator, f_forcing=f_forcing, f_diffusion=f_diffusion,)
-    f_rk = lambda a, t: rk(a, t, dadt, dt)
+    dadt = lambda a, t: time_derivative_2d_navier_stokes(a, t, f_poisson_bracket, f_phi, denominator, f_forcing=f_forcing, f_diffusion=f_diffusion)
+    
+    def f_rk(a, t):
+        return rk(a, t, dadt, dt)
 
     def MSE(a, a_exact):
         return np.mean(np.sum((a - a_exact) ** 2 / leg_ip[None, None, :], axis=-1))
@@ -85,10 +85,10 @@ def simulate_2D(
             return loss
     else:
         if output:
-            scanf = jit(lambda sol, x: _scan_output(sol, x, f_rk))
+            scanf = lambda sol, x: _scan_output(sol, x, f_rk)
             _, data = scan(scanf, (a0, t0), None, length=nt)
             return data
         else:
-            scanf = jit(lambda sol, x: _scan(sol, x, f_rk))
+            scanf = lambda sol, x: _scan(sol, x, f_rk)
             (a_f, t_f), _ = scan(scanf, (a0, t0), None, length=nt)
             return (a_f, t_f)

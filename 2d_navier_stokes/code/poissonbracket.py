@@ -8,8 +8,7 @@ import jax
 
 from flux import Flux
 from helper import f_to_DG, minmod_3
-from basisfunctions import *
-"""from basisfunctions import (
+from basisfunctions import (
     create_poisson_bracket_volume_matrix,
     create_poisson_bracket_boundary_matrix_centered,
     get_leftright_alternate,
@@ -40,7 +39,7 @@ from basisfunctions import *
     leg_FE_bottom_integrate,
     leg_FE_top_integrate,
     change_legendre_points_twice,
-)"""
+)
 
 config.update("jax_enable_x64", True)
 

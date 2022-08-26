@@ -1,11 +1,12 @@
 import jax.numpy as np
+from functools import partial
 import numpy as onp
 from basisfunctions import (
     legendre_npbasis,
     node_locations,
     legendre_inner_product,
 )
-from jax import vmap, hessian
+from jax import vmap, hessian, jit
 
 
 def _trapezoidal_integration(f, xi, xf, yi, yf, n=None):
@@ -293,6 +294,51 @@ def f_to_FE(nx, ny, Lx, Ly, order, func, t):
 
     _vmap_evaluate = vmap(vmap(vmap(func, (0, 0, None)), (0, 0, None)), (0, 0, None))
     return _vmap_evaluate(x_eval, y_eval, t)
+
+@partial(
+    jit,
+    static_argnums=(
+        1,
+        2,
+        3,
+        4,
+        7,
+    ),
+)
+def convert_DG_representation(
+    a, order_new, order_high, nx_new, ny_new, Lx, Ly, n = 8
+):
+    """
+    Inputs:
+    a: (nt, nx, ny, num_elements(order_high))
+
+    Outputs:
+    a_converted: (nt, nx_new, ny_new, num_elements(order_new))
+    """
+    _, nx_high, ny_high = a.shape[0:3]
+    dx_high = Lx / nx_high
+    dy_high = Ly / ny_high
+
+    def convert_repr(a):
+        def f_high(x, y, t):
+            return _evalf_2D_integrate(x, y, a, dx_high, dy_high, order_high)
+
+        t0 = 0.0
+        return f_to_DG(nx_new, ny_new, Lx, Ly, order_new, f_high, t0, n=n)
+
+    vmap_convert_repr = vmap(convert_repr)
+    return vmap_convert_repr(a)
+
+
+def vorticity_to_velocity(Lx, Ly, a, f_poisson):
+    H = f_poisson(a)
+    nx, ny, _ = H.shape
+    dx = Lx / nx
+    dy = Ly / ny
+
+    u_y = -(H[:,:,2] - H[:,:,3]) / dx
+    u_x = (H[:,:,2] - H[:,:,1]) / dy
+    return u_x, u_y
 
 
 def nabla(f):

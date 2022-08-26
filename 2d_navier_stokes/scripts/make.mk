@@ -1,5 +1,5 @@
 # SCRIPTS
-COMPUTE_RUNTIME_SCRIPT = $(BASEDIR)/scripts/test_runtime.py
+COMPUTE_RUNTIME_SCRIPT = $(BASEDIR)/scripts/compute_runtime.py
 COMPUTE_CORRCOEF_SCRIPT = $(BASEDIR)/scripts/compute_corrcoef.py
 DG_PLOT_SIM = $(BASEDIR)/scripts/plot_dg_demo.py
 PLOT_ACCURACY_RUNTIME_SCRIPT = $(BASEDIR)/scripts/plot_accuracy_vs_runtime.py
