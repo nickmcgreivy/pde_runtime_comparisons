@@ -39,6 +39,11 @@ min_k = 1
 num_init_modes = 6
 amplitude_max = 4.0
 N_test = 5
+orders = [0, 1, 2]
+nxs = [[32, 64, 128], [32, 48, 64], [16, 32, 48]]
+nxs_baseline = [32, 64, 128]
+baseline_dt_reduction = 6.0
+Tf = 1.0
 
 ################
 # END PARAMETERS
@@ -125,10 +130,10 @@ def compute_runtime(args, random_seed, device, orders, nxs, nxs_baseline, baseli
 		print("FV baseline, Tf = {}, nx = {}".format(Tf, nx))
 		print("runtimes: {}".format(times))
 		f = h5py.File(
-			"{}/data/{}_FVbaseline_nx{}.hdf5".format(args.read_write_dir, device, nx),
+			"{}/data/{}_FVbaseline.hdf5".format(args.read_write_dir, device),
 			"w",
 		)
-		f["runtime"] = np.median(times)
+		f[nx] = np.median(times)
 		f.close()
 
 	###### 
@@ -155,14 +160,8 @@ def compute_runtime(args, random_seed, device, orders, nxs, nxs_baseline, baseli
 			f_diffusion = get_diffusion_func(order, Lx, Ly, diffusion_coefficient)
 			f_forcing_sim = get_forcing_dg(order, nx, ny, Lx, Ly, damping_coefficient, forcing_coefficient)
 
-			@partial(
-				jit,
-				static_argnums=(
-					2
-				),
-			)
+			@partial(jit, static_argnums=(2),)
 			def simulate(a_i, t_i, nt, dt):
-				
 				return simulate_2D(
 					a_i,
 					t_i,
@@ -199,22 +198,16 @@ def compute_runtime(args, random_seed, device, orders, nxs, nxs_baseline, baseli
 			print("order = {}, Tf = {}, nx = {}".format(order, Tf, nx))
 			print("runtimes: {}".format(times))
 			f = h5py.File(
-				"{}/data/{}_order{}_nx{}.hdf5".format(args.read_write_dir, device, order, nx),
+				"{}/data/{}_order{}.hdf5".format(args.read_write_dir, device, order),
 				"w",
 			)
-			f["runtime"] = np.median(times)
+			f[nx] = np.median(times)
 			f.close()
 
 
 
 def main():
 	args = get_args()
-
-	orders = [0, 1, 2]
-	nxs = [[32, 64, 128], [32, 48, 64], [16, 32, 48]]
-	nxs_baseline = [32, 64, 128]
-	baseline_dt_reduction = 6.0
-	Tf = 1.0
 
 
 	from jax.lib import xla_bridge
