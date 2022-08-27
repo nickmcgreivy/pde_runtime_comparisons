@@ -56,6 +56,7 @@ def simulate_2D(
     leg_ip = np.asarray(legendre_inner_product(order))
     denominator = leg_ip * dx * dy
 
+
     dadt = lambda a, t: time_derivative_2d_navier_stokes(a, t, f_poisson_bracket, f_phi, denominator, f_forcing=f_forcing, f_diffusion=f_diffusion)
     
     def f_rk(a, t):
