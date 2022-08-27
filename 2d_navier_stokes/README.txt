@@ -2,9 +2,12 @@ Need to download:
 
 pybind11
 jax
+jaxlib 
 sympy
 h5py
 tree_math
+torch
+matplotlib
 
 cd code/generate_sparse_solve
 tar -xvf eigen-3.4.0.tar.bz2 

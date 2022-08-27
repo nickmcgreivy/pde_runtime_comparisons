@@ -16,6 +16,7 @@ from poissonbracket import get_poisson_bracket
 from diffusion import get_diffusion_func
 from fv_and_pseudospectral_baselines import vorticity, get_step_func, simulate_fv_baseline, get_velocity, get_forcing, downsample_ux, downsample_uy
 from simulate import simulate_2D
+from initial_conditions import f_init_MLCFD
 
 PI = np.pi
 
@@ -34,10 +35,6 @@ diffusion_coefficient = 1/Re
 forcing_coefficient = 1.0 
 damping_coefficient = 0.1
 runge_kutta = "ssp_rk3"
-max_k = 5
-min_k = 1
-num_init_modes = 6
-amplitude_max = 4.0
 orders = [0, 1, 2]
 nxs = [[32, 64, 128], [32, 48, 64], [16, 32, 48]]
 nxs_fv_baseline = [32, 64, 128]
@@ -49,31 +46,6 @@ N_test = 1 # change to 5 or 10
 ################
 # END PARAMETERS
 ################
-
-def get_initial_condition(key):
-
-	def sum_modes(x, y, amplitudes, ks_x, ks_y, phases_x, phases_y):
-		return np.sum(
-			amplitudes[None, :]
-			* np.sin(
-				ks_x[None, :] * 2 * PI / Lx * x[:, None] + phases_x[None, :]
-			) * np.sin(
-				ks_y[None, :] * 2 * PI / Ly * y[:, None] + phases_y[None, :]
-			),
-			axis=1,
-		)
-
-	key1, key2, key3, key4, key5 = jax.random.split(key, 5)
-	phases_x = jax.random.uniform(key1, (num_init_modes,)) * 2 * PI
-	phases_y = jax.random.uniform(key2, (num_init_modes,)) * 2 * PI
-	ks_x = jax.random.randint(
-		key3, (num_init_modes,), min_k, max_k
-	)
-	ks_y = jax.random.randint(
-		key4, (num_init_modes,), min_k, max_k
-	)
-	amplitudes = jax.random.uniform(key5, (num_init_modes,)) * amplitude_max
-	return lambda x, y, t: sum_modes(x, y, amplitudes, ks_x, ks_y, phases_x, phases_y)
 
 
 def get_forcing_dg(order, nx, ny, Lx, Ly, damping_coefficient, forcing_coefficient):
@@ -110,7 +82,7 @@ def compute_runtime(args, random_seed, device, orders, nxs, nxs_fv_baseline, bas
 
 	key = jax.random.PRNGKey(random_seed)
 	key1, key2 = jax.random.split(key)
-	f_init = get_initial_condition(key1)
+	f_init = f_init_MLCFD(key1)
 
 	t0 = 0.0
 	a0 = f_to_DG(nx_max, ny_max, Lx, Ly, order_max, f_init, t0, n = 8)

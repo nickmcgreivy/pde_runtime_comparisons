@@ -12,7 +12,6 @@ Tf = 10.0
 Np = int(Tf * 10)
 T_chunk = Tf / Np
 N_test = 1
-N_compute_runtime = 5
 T_runtime = 1.0
 device = 'cpu'
 
