@@ -3,6 +3,11 @@ import jax
 from jax import jit, config
 from functools import partial
 import h5py
+import jax_cfd.base as cfd
+from jax_cfd.base import boundaries
+from jax_cfd.base import forcings
+import jax_cfd.base.grids as grids
+import jax_cfd.spectral as spectral
 config.update("jax_enable_x64", True)
 
 from arguments import get_args
@@ -13,267 +18,366 @@ from poissonbracket import get_poisson_bracket
 from diffusion import get_diffusion_func
 from simulate import simulate_2D
 from rungekutta import FUNCTION_MAP
-from fv_and_pseudospectral_baselines import vorticity, get_step_func, simulate_fv_baseline, get_velocity, get_forcing, downsample_ux, downsample_uy
 from initial_conditions import f_init_MLCFD
-
-PI = np.pi
 
 ################
 # PARAMETERS OF SIMULATION
 ################
 
+PI = np.pi
 Lx = 2 * PI
 Ly = 2 * PI
-order_max = 2
-nx_max = 64
-ny_max = 64
+order_exact = 2
+nx_exact = 128
+ny_exact = 128
 t0 = 0.0
-cfl_safety = 0.5
 Re = 1000
-diffusion_coefficient = 1/Re
-forcing_coefficient = 1.0 
+viscosity = 1/Re
+forcing_coefficient = 1.0
 damping_coefficient = 0.1
 runge_kutta = "ssp_rk3"
 orders = [0, 1, 2]
-nxs = [[32, 64, 128], [32, 48, 64], [16, 32, 48, 64]]
-nxs_fv_baseline = [32, 64, 128]
-baseline_dt_reductions = [8.0]
+#nxs = [[32, 64, 128], [16, 32, 48, 64], [8, 16, 24, 32, 48]]
+nxs_dg = [[],[],[]]
+nxs_fv_baseline = [32, 64, 128, 256, 512]
+nxs_ps_baseline = [64, 128, 256]
 exact_flux = Flux.UPWIND
 
+density = 1.
+max_velocity = 7.0
+ic_wavenumber = 2
 
-Tf = 10.0
-Np = int(Tf * 10)
-burn_in_time = 10.0
-T_runtime = 1.0
-N_compute_runtime = 5
+cfl_safety_exact = 0.3
+cfl_safety_dg = 0.3
+cfl_safety_jax_cfd = 0.5
+cfl_safety_cfd = 0.5
+cfl_safety_ps = 0.5
+
+t_final = 10.0
+outer_steps = int(t_final * 10)
+t_chunk = t_final / outer_steps
+burn_in_time = 0.0
 N_test = 1 # change to 5 or 10
 
 ################
 # END PARAMETERS
 ################
 
-def get_forcing_dg(order, nx, ny, Lx, Ly, damping_coefficient, forcing_coefficient):
-	leg_ip = np.asarray(legendre_inner_product(order))
-	ff = lambda x, y, t: -4 * (2 * PI / Ly) * np.cos(4 * (2 * PI / Ly) * y)
-	y_term = inner_prod_with_legendre(nx, ny, Lx, Ly, order, ff, 0.0, n = 8)
-	dx = Lx / nx
-	dy = Ly / ny
-	return lambda zeta: (y_term - dx * dy * damping_coefficient * zeta * leg_ip) * forcing_coefficient
 
+################
+# WRITE TO FILE
+################
 
 def create_corr_file(n, args):
-	# 
-	f = h5py.File(
-		"{}/data/corr_run{}_fv.hdf5".format(args.read_write_dir, n),
-		"w",
-	)
-	for nx in nxs_fv_baseline:
-		dset_new = f.create_dataset(str(nx), (Np+1,), dtype="float64")
-	f.close()
+    # 
+    f = h5py.File(
+        "{}/data/corr_run{}_fv.hdf5".format(args.read_write_dir, n),
+        "w",
+    )
+    for nx in nxs_fv_baseline:
+        dset_new = f.create_dataset(str(nx), (outer_steps+1,), dtype="float64")
+    f.close()
 
-	for o, order in enumerate(orders):
-		f = h5py.File(
-			"{}/data/corr_run{}_order{}.hdf5".format(args.read_write_dir, n, order),
-			"w",
-		)
-		for nx in nxs[o]:
-			dset_new = f.create_dataset(str(nx), (Np+1,), dtype="float64")
-		f.close()
+    f = h5py.File(
+        "{}/data/corr_run{}_ps.hdf5".format(args.read_write_dir, n),
+        "w",
+    )
+    for nx in nxs_fv_baseline:
+        dset_new = f.create_dataset(str(nx), (outer_steps+1,), dtype="float64")
+    f.close()
+
+    for o, order in enumerate(orders):
+        f = h5py.File(
+            "{}/data/corr_run{}_order{}.hdf5".format(args.read_write_dir, n, order),
+            "w",
+        )
+        for nx in nxs_dg[o]:
+            dset_new = f.create_dataset(str(nx), (outer_steps+1,), dtype="float64")
+        f.close()
 
 
 def write_corr_file(n, args, name, nx, j, value):
-	f = h5py.File(
-		"{}/data/corr_run{}_{}.hdf5".format(args.read_write_dir, n, name),
-		"r+",
-	)
-	f[str(nx)][j] = value
-	f.close()
+    f = h5py.File(
+        "{}/data/corr_run{}_{}.hdf5".format(args.read_write_dir, n, name),
+        "r+",
+    )
+    f[str(nx)][j] = value
+    f.close()
 
+
+#############
+# HELPER FUNCTIONS
+#############
+
+
+def kolmogorov_forcing_cfd(grid, scale, k):
+    offsets = grid.cell_faces
+
+    y = grid.mesh(offsets[0])[1]
+    u = scale * grids.GridArray(np.sin(k * y), offsets[0], grid)
+
+    if grid.ndim == 2:
+        v = grids.GridArray(np.zeros_like(u.data), (1/2, 1), grid)
+        f = (u, v)
+    else:
+        raise NotImplementedError
+
+    def forcing(v):
+        del v
+        return f
+    return forcing
+
+def get_forcing_cfd(nx, ny):
+    grid = get_grid(nx, ny)
+    f_constant_term = kolmogorov_forcing_cfd(grid, forcing_coefficient, 4)
+    def f_forcing(v):
+        return tuple(c_i - damping_coefficient * v_i.array for c_i, v_i in zip(f_constant_term(v), v))
+    return f_forcing
+
+def get_forcing_ps(nx, ny):
+    offsets = ((0, 0), (0, 0))
+    k=4
+    forcing_fn = lambda grid: forcings.kolmogorov_forcing(grid, scale = forcing_coefficient, k=k, offsets=offsets)
+    return forcing_fn
+
+def get_velocity_cfd(u_x, u_y):
+    assert u_x.shape == u_y.shape
+    bcs = boundaries.periodic_boundary_conditions(2)
+  
+    grid = grids.Grid(u_x.shape, domain=((0, Lx), (0, Ly)))
+    u_x = grids.GridVariable(grids.GridArray(u_x, grid.cell_faces[0], grid=grid), bcs)
+    u_y = grids.GridVariable(grids.GridArray(u_y, grid.cell_faces[1], grid=grid), bcs)
+    return (u_x, u_y)
+
+def get_trajectory_fn(step_fn, outer_steps):
+    rollout_fn = jax.jit(cfd.funcutils.trajectory(step_fn, outer_steps))
+    
+    def get_rollout(v0):
+        _, trajectory = rollout_fn(v0)
+        return trajectory
+    
+    return get_rollout
+
+def concatenate_vorticity(v0, trajectory):
+    return np.concatenate((v0[None], trajectory), axis=0)
+
+def concatenate_velocity(u0, trajectory):
+    return (np.concatenate((u0[0].data[None], trajectory[0].data),axis=0), np.concatenate((u0[1].data[None], trajectory[1].data),axis=0))
+
+
+def downsample_ux(u_x, F):
+  nx, ny = u_x.shape
+  assert nx % F == 0
+  return np.mean(u_x[F-1::F,:].reshape(nx // F, ny // F, F), axis=2)
+    
+
+def downsample_uy(u_y, F):
+  nx, ny = u_y.shape
+  assert ny % F == 0
+  return np.mean(u_y[:, F-1::F].reshape(nx // F, F, ny // F), axis=1)
+
+
+def get_dt_cfd(grid):
+    return cfd.equations.stable_time_step(max_velocity, cfl_safety_cfd, viscosity, grid)
+
+def get_grid(nx, ny):
+    return grids.Grid((nx, ny), domain=((0, Lx), (0, Ly)))
+
+def get_forcing_dg(order, nx, ny):
+    leg_ip = np.asarray(legendre_inner_product(order))
+    ff = lambda x, y, t: 4 * (2 * PI / Ly) * np.cos(4 * (2 * PI / Ly) * y)
+    y_term = inner_prod_with_legendre(nx, ny, Lx, Ly, order, ff, 0.0, n = 8)
+    dx = Lx / nx
+    dy = Ly / ny
+    return lambda zeta: (forcing_coefficient * y_term - dx * dy * damping_coefficient * zeta * leg_ip)
+
+def get_inner_steps_dt_cfd(nx, ny, cfl_safety, T):
+    inner_steps = int(T // get_dt_cfd(grid)) + 1
+    dt = T / inner_steps
+    return inner_steps, dt
+
+def get_inner_steps_dt_DG(nx, ny, order, cfl_safety, T):
+    dx = Lx / (nx)
+    dy = Ly / (ny)
+    dt_i = cfl_safety * ((dx * dy) / (dx + dy)) / (2 * order + 1)
+    inner_steps = int(T // dt_i) + 1
+    dt = T / inner_steps
+    return inner_steps, dt
 
 def shift_down_left(a):
     return (a + np.roll(a, 1, axis=1) + np.roll(a, 1, axis=0) + np.roll(np.roll(a, 1, axis=0), 1, axis=1)) / 4
 
+def vorticity(u):
+    return cfd.finite_differences.curl_2d(u).data
 
-def compute_corrcoef(n, args, key, orders, nxs, nxs_fv_baseline, baseline_dt_reductions, Tf, Np):
+def downsample_u(u0, nx_new):
+    ux, uy = u0
+    nx_old, ny_old = ux.data.shape
+    assert nx_old == ny_old
+    factor = nx_old // nx_new
+    ux_ds, uy_ds = (downsample_ux(ux.data, factor), downsample_uy(uy.data, factor))
+    return get_velocity_cfd(ux_ds, uy_ds)
 
-	create_corr_file(n, args)
-	f_init = f_init_MLCFD(key)
-	a0 = f_to_DG(nx_max, ny_max, Lx, Ly, order_max, f_init, t0, n = 8)
+def vorticity_cfd_to_dg(vorticity_cfd, nx_new, ny_new, order_new):
+    return convert_DG_representation(vorticity_cfd[...,None][None], order_new, 0, nx_new, ny_new, Lx, Ly)[0]
 
-	dx_min = Lx / nx_max
-	dy_min = Ly / ny_max
-	dt_exact = cfl_safety * ((dx_min * dy_min) / (dx_min + dy_min)) / (2 * order_max + 1)
-	nt_burn_in = int(burn_in_time // dt_exact) + 1
-	dt_burn_in = burn_in_time / nt_burn_in
-	
-	f_poisson_exact = get_poisson_solver(args.poisson_dir, nx_max, ny_max, Lx, Ly, order_max)
-	f_phi_exact = lambda zeta, t: f_poisson_exact(zeta)
-	f_diffusion_exact = get_diffusion_func(order_max, Lx, Ly, diffusion_coefficient)
-	f_forcing_exact = get_forcing_dg(order_max, nx_max, ny_max, Lx, Ly, damping_coefficient, forcing_coefficient)
-	f_poisson_bracket_exact = get_poisson_bracket(args.poisson_dir, order_max, exact_flux)
+def get_u0(key):
+    nx_max = nxs_fv_baseline[-1]
+    ny_max = nx_max
+    grid = grids.Grid((nx_max, ny_max), domain=((0, Lx), (0, Lx)))
+    return cfd.initial_conditions.filtered_velocity_field(key, grid, max_velocity, ic_wavenumber)
 
-	@partial(jit,static_argnums=(2),)
-	def sim_exact(a_i, t_i, nt, dt):
-		return simulate_2D(
-			a_i,
-			t_i,
-			nx_max,
-			ny_max,
-			Lx,
-			Ly,
-			order_max,
-			dt,
-			nt,
-			f_poisson_bracket_exact,
-			f_phi_exact,
-			a_data=None,
-			output=False,
-			f_diffusion=f_diffusion_exact,
-			f_forcing=f_forcing_exact,
-			rk=FUNCTION_MAP[runge_kutta],
-		)
+def get_u0_fv(key, nx, ny):
+    assert nx == ny
+    u0 = get_u0(key)
+    return downsample_u(u0, nx)
 
-	a_burn_in_exact, t_burn_in = sim_exact(a0, t0, nt_burn_in, dt_burn_in)
-	
-	########
-	# Store exact data at Np intervals 
-	########
+def get_v0_ps(key, nx, ny):
+    u0_ds = get_u0_fv(key, nx, ny)
+    return vorticity(u0_ds)
 
-	T_chunk = Tf / Np
-	nt_sim_exact = int(T_chunk // dt_exact) + 1
-	dt_exact = T_chunk / nt_sim_exact
+def get_v0_dg(key, nx, ny, order):
+    u0 = get_u0(key)
+    v0 = vorticity(u0)
+    return vorticity_cfd_to_dg(v0, nx, ny, order)
 
-	a_exact_all = a_burn_in_exact[...,None]
-	a_exact = a_burn_in_exact
-	t_exact = t_burn_in
-	for j in range(Np):
-		a_exact, t_exact = sim_exact(a_exact, t_exact, nt_sim_exact, dt_exact)
-		a_exact_all = np.concatenate((a_exact_all, a_exact[...,None]),axis=-1)
+def get_dg_step_fn(args, nx, ny, order, T):
+    if order == 0:
+        flux = Flux.VANLEER
+    else:
+        flux = Flux.UPWIND
+    
+    f_poisson_bracket = get_poisson_bracket(args.poisson_dir, order, flux)
+    f_poisson_solve = get_poisson_solver(args.poisson_dir, nx, ny, Lx, Ly, order)
+    f_phi = lambda zeta, t: f_poisson_solve(zeta)
+    f_diffusion = get_diffusion_func(order, Lx, Ly, viscosity)
+    f_forcing_sim = get_forcing_dg(order, nx, ny)
+    
+    inner_steps, dt = get_inner_steps_dt_DG(nx, ny, order, cfl_safety_dg, T)
 
+    @jax.jit
+    def simulate(a_i):
+        a, _ = simulate_2D(a_i, t0, nx, ny, Lx, Ly, order, dt, inner_steps, 
+                           f_poisson_bracket, f_phi, a_data=None, output=False, f_diffusion=f_diffusion,
+                            f_forcing=f_forcing_sim, rk=FUNCTION_MAP[runge_kutta])
+        return a
+    return simulate
 
+def get_fv_step_fn(nx, ny, T):
+    grid = get_grid(nx, ny)
+    inner_steps, dt = get_inner_steps_dt_cfd(nx, ny, cfl_safety_cfd, T)
+    step_fn = cfd.equations.semi_implicit_navier_stokes(
+        density=density, 
+        viscosity=viscosity, 
+        forcing=get_forcing_cfd(nx, ny),
+        dt=dt, 
+        grid=grid)
+    return jax.jit(cfd.funcutils.repeated(step_fn, inner_steps))
 
-	def store_correlation(a_f, order, nx, ny, name, j):
-		a_e = convert_DG_representation(a_exact_all[...,j][None], order, order_max, nx, ny, Lx, Ly)[0]
-		M = np.concatenate([a_f[:,:,0].reshape(-1)[:,None], a_e[:,:,0].reshape(-1)[:,None]],axis=1)
-		corrcoeff_j = np.corrcoef(M.T)[0,1]
-		print("Run: {}, {}, nx = {}, T = {:.1f}, corr = {}".format(n, name, nx, j * T_chunk, corrcoeff_j))
-		write_corr_file(n, args, name, nx, j, corrcoeff_j)
-
-	
-	######
-	# start with baseline implementation
-	######
-	for nx in nxs_fv_baseline:
-		for BASELINE_DT_REDUCTION in baseline_dt_reductions:
-			print("baseline, nx is {}, reduction is {}".format(nx, BASELINE_DT_REDUCTION))
-			
-			ny = nx
-			dx = Lx / (nx)
-			dy = Ly / (ny)
-			dt = (cfl_safety / BASELINE_DT_REDUCTION) * ((dx * dy) / (dx + dy))
-			nt_chunk = int(T_chunk // dt) + 1
-			dt = T_chunk / nt_chunk
-			f_forcing_baseline = get_forcing(Lx, Ly, forcing_coefficient, damping_coefficient, nx, ny)
-			step_func = get_step_func(diffusion_coefficient, dt, forcing=f_forcing_baseline)
-
-			a_burn_in = convert_DG_representation(a_burn_in_exact[None], 0, order_max, nxs_fv_baseline[-1], nxs_fv_baseline[-1], Lx, Ly)[0]
-			f_ps_exact = jit(get_poisson_solver(args.poisson_dir, nxs_fv_baseline[-1], nxs_fv_baseline[-1], Lx, Ly, 0))
-			u_x_burn_in, u_y_burn_in = vorticity_to_velocity(Lx, Ly, a_burn_in, f_ps_exact)
+def get_ps_step_fn(nx, ny, T):
+    grid = get_grid(nx, ny)
+    inner_steps, dt = get_inner_steps_dt_cfd(nx, ny, cfl_safety_cfd, T)
+    step_fn = spectral.time_stepping.crank_nicolson_rk4(
+        spectral.equations.NavierStokes2D(viscosity, grid, drag=damping_coefficient, smooth=True, 
+            forcing_fn = get_forcing_ps(nx, ny)), dt)
+    return jax.jit(cfd.funcutils.repeated(step_fn, inner_steps))
 
 
-			DS_FAC = nxs_fv_baseline[-1] // nx
-			u_x_burn_in = downsample_ux(u_x_burn_in, DS_FAC)
-			u_y_burn_in = downsample_uy(u_y_burn_in, DS_FAC)
-			v_burn_in = get_velocity(Lx, Ly, u_x_burn_in, u_y_burn_in)
-			v_f = v_burn_in
-
-			
-			for j in range(Np+1):
-				a_f = shift_down_left(vorticity(v_f))[..., None]
-				store_correlation(a_f, 0, nx, ny, "fv", j)
-				v_f = simulate_fv_baseline(v_f, step_func, nt_chunk)
-
-	
-
-	###### 
-	# loop through orders and nxs
-	######
-
-	for o, order in enumerate(orders):
-		if order == 0:
-			flux = Flux.VANLEER
-		else:
-			flux = Flux.UPWIND
-
-		for nx in nxs[o]:
-			print("nx is {}".format(nx))
-			ny = nx
-			dx = Lx / (nx)
-			dy = Ly / (ny)
-			dt = cfl_safety * ((dx * dy) / (dx + dy)) / (2 * order + 1)
-			nt_chunk = int(T_chunk // dt) + 1
-			dt = T_chunk / nt_chunk
-
-			f_poisson_bracket = get_poisson_bracket(args.poisson_dir, order, flux)
-			f_poisson_solve = get_poisson_solver(args.poisson_dir, nx, ny, Lx, Ly, order)
-			f_phi = lambda zeta, t: f_poisson_solve(zeta)
-			f_diffusion = get_diffusion_func(order, Lx, Ly, diffusion_coefficient)
-			f_forcing_sim = get_forcing_dg(order, nx, ny, Lx, Ly, damping_coefficient, forcing_coefficient)
-
-			@partial(
-				jit,
-				static_argnums=(
-					2
-				),
-			)
-			def simulate(a_i, t_i, nt, dt):
-				return simulate_2D(
-					a_i,
-					t_i,
-					nx,
-					ny,
-					Lx,
-					Ly,
-					order,
-					dt,
-					nt,
-					f_poisson_bracket,
-					f_phi,
-					a_data=None,
-					output=False,
-					f_diffusion=f_diffusion,
-					f_forcing=f_forcing_sim,
-					rk=FUNCTION_MAP[runge_kutta],
-				)
+def store_correlation(n, args, exact_trajectory, nx, ny, name, j, v_j):
+    v_e = convert_DG_representation(exact_trajectory[j][None], 0, order_max, nx, ny, Lx, Ly)[0]
+    M = np.concatenate([v_j[:,:,0].reshape(-1)[:,None], v_e[:,:,0].reshape(-1)[:,None]],axis=1)
+    corrcoeff_j = np.corrcoef(M.T)[0,1]
+    print("Run: {}, {}, nx = {}, T = {:.1f}, corr = {}".format(n, name, nx, j * T_chunk, corrcoeff_j))
+    write_corr_file(n, args, name, nx, j, corrcoeff_j)
 
 
-			a_burn_in = convert_DG_representation(a_burn_in_exact[None], order, order_max, nx, ny, Lx, Ly)[0]
-			a_f, t_f = a_burn_in, t_burn_in
-
-			for j in range(Np+1):
-				store_correlation(a_f, order, nx, ny, "order{}".format(order), j)
-				a_f, t_f = simulate(a_f, t_f, nt_chunk, dt)
+###################
+# END HELPER FUNCTIONS
+###################
 
 
-	
+def compute_corrcoef(n, args, key, orders):
+
+    create_corr_file(n, args)
+
+
+    ########
+    # Store exact data
+    ########
+
+    exact_step_fn = get_dg_step_fn(args, nx_exact, ny_exact, order_exact, t_chunk)
+    exact_rollout_fn = get_trajectory_fn(exact_step_fn, outer_steps)
+
+    v0 = get_v0_dg(key, nx_exact, ny_exact, order_exact)
+    exact_trajectory = exact_rollout_fn(-v0)
+    exact_trajectory = concatenate_vorticity(-v0, exact_trajectory)
+
+    store_corr_fn = lambda nx, ny, name, j, v_j:  store_correlation(n, args, exact_trajectory, nx, ny, name, j, v_j)
+    
+
+    ### FV Baseline
+
+    for nx in nxs_fv_baseline:
+
+        ny = nx
+        u0 = get_u0_fv(key, nx, ny)
+        step_fn = get_fv_step_fn(nx, ny, t_chunk)
+        rollout_fn = get_trajectory_fn(step_fn, outer_steps)
+
+        trajectory = rollout_fn(u0)
+        trajectory_fv = concatenate_velocity(u0, trajectory)
+
+        for j in range(outer_steps+1):
+            u_j = get_velocity_cfd(trajectory_fv[0][j], trajectory_fv[1][j])
+            store_corr_fn(nx, ny, "fv", j, vorticity(u_j))
+
+
+    ### PS Baseline
+    for nx in nxs_ps_baseline:
+        ny = nx
+        v0 = get_v0_ps(nx, ny)
+        step_fn = get_ps_step_fn(nx, ny, t_chunk)
+        rollout_fn = get_trajectory_fn(step_fn, outer_steps)
+
+        v_hat0 = np.fft.rfftn(v0)
+        trajectory_hat = rollout_fn(v_hat0)
+        trajectory_hat_ps = concatenate_vorticity(v_hat0, trajectory_hat)
+        trajectory_ps = np.fft.irfftn(trajectory_hat_ps, axes=(1,2))
+
+        for j in range(outer_steps+1):
+            store_corr_fn(nx, ny, "ps", j, trajectory_ps[j][...,None])
+
+    # DG Baseline
+
+    for o, order in enumerate(orders):
+        for nx in nxs_dg[o]:
+            ny = nx
+            v0 = get_v0_dg(key, nx, ny, order)
+            step_fn = get_dg_step_fn(args, nx, ny, order, t_final/outer_steps)
+            rollout_fn = get_trajectory_fn(step_fn, outer_steps)
+
+            trajectory = rollout_fn(-v0)
+            trajectory_dg = concatenate_vorticity(-v0, trajectory)
+            for j in range(outer_steps+1):
+                store_corr_fn(nx, ny, "order{}".format(order), j, trajectory_dg[j]) 
 
 
 def main():
-	args = get_args()
+    args = get_args()
 
-	random_seed = 42
-	key = jax.random.PRNGKey(random_seed)
+    random_seed = 42
+    key = jax.random.PRNGKey(random_seed)
 
-	for n in range(N_test):
-		key, _ = jax.random.split(key)
-		compute_corrcoef(n, args, key, orders, nxs, nxs_fv_baseline, baseline_dt_reductions, Tf, Np)
+    for n in range(N_test):
+        key, _ = jax.random.split(key)
+        compute_corrcoef(n, args, key, orders)
 
-	#nxs = [[32, 48, 64, 96, 128, 192, 256], [16, 24, 32, 48, 64, 96, 128], [16, 24, 32, 48, 64, 96]]
-	#nxs_fv_baseline = [32, 64, 128, 256, 512]
-	
+    #nxs = [[32, 48, 64, 96, 128, 192, 256], [16, 24, 32, 48, 64, 96, 128], [16, 24, 32, 48, 64, 96]]
+    #nxs_fv_baseline = [32, 64, 128, 256, 512]
+    
 
 
 
 
 if __name__ == '__main__':
-	main()
+    main()

@@ -29,9 +29,10 @@ forcing_coefficient = 0.1
 runge_kutta = "ssp_rk3"
 nxs = [8, 16]
 N_compute_runtime = 5
-N_test = 5 # change to 5 or 10
 t0 = 0.0
 T_chunk = 1.0
+
+N_test = 5 # change to 5 or 10
 
 Tf = 50.0
 cfl_safety = 10.0
