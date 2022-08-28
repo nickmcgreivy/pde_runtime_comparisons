@@ -33,30 +33,31 @@ PI = np.pi
 PI = np.pi
 Lx = 2 * PI
 Ly = 2 * PI
+density = 1.
+max_velocity = 7.0
+ic_wavenumber = 2
 order_exact = 2
-nx_exact = 128
-ny_exact = 128
+exact_flux = Flux.UPWIND
 t0 = 0.0
 Re = 1000
 viscosity = 1/Re
 forcing_coefficient = 1.0
 damping_coefficient = 0.1
 runge_kutta = "ssp_rk3"
+
+nx_exact = 128
+ny_exact = 128
+
 orders = [0, 1, 2]
-nxs_dg = [[32, 64, 128], [16, 32, 48, 64], [8, 16, 24, 32, 48]]
-nxs_fv_baseline = [32, 64, 128]
-nxs_ps_baseline = [64, 128]
-exact_flux = Flux.UPWIND
+nxs_dg = [[64, 128, 256, 512], [16, 32, 48, 64, 96, 128], [8, 16, 24, 32, 48, 64, 96]]
+nxs_fv_baseline = [64, 128, 256, 512]
+nxs_ps_baseline = [64, 128, 256, 512]
 
-density = 1.
-max_velocity = 7.0
-ic_wavenumber = 2
-
-cfl_safety_dg = 0.4
+cfl_safety_dg = 0.35
 cfl_safety_cfd = 0.5
 
 N_compute_runtime = 5
-t_runtime = 2.0
+t_runtime = 1.0
 
 ################
 # END PARAMETERS

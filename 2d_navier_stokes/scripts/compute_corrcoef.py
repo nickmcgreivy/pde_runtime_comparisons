@@ -40,19 +40,19 @@ damping_coefficient = 0.1
 
 order_exact = 2
 exact_flux = Flux.UPWIND
-nx_exact = 64
-ny_exact = 64
-
-orders = [0, 1, 2]
-nxs_dg = [[32, 64, 128], [16, 32, 64], [8, 16, 24, 32, 48, 64]]
-#nxs_dg = [[32, 48, 64, 96, 128, 192, 256], [16, 24, 32, 48, 64, 96, 128], [16, 24, 32, 48, 64, 96]]
-#nxs_fv_baseline = [32, 64, 128, 256, 512]
-nxs_fv_baseline = []
-nxs_ps_baseline = []
 nx_max = ny_max = 512
 
+
+nx_exact = 128
+ny_exact = 128
+orders = [0, 1, 2]
+nxs_dg = [[64, 128, 256], [16, 32, 48, 64, 96, 128], [8, 16, 24, 32, 48, 64, 96]]
+nxs_fv_baseline = [64, 128, 256, 512]
+nxs_ps_baseline = [64, 128, 256, 512]
+
+
 cfl_safety_exact = 0.3
-cfl_safety_dg = 0.4
+cfl_safety_dg = 0.35
 cfl_safety_cfd = 0.5
 
 t_final = 10.0
@@ -83,7 +83,7 @@ def create_corr_file(n, args):
         "{}/data/corr_run{}_ps.hdf5".format(args.read_write_dir, n),
         "w",
     )
-    for nx in nxs_fv_baseline:
+    for nx in nxs_ps_baseline:
         dset_new = f.create_dataset(str(nx), (outer_steps+1,), dtype="float64")
     f.close()
 
@@ -233,8 +233,9 @@ def get_u0_fv(key, nx, ny):
     return downsample_u(u0, nx)
 
 def get_v0_ps(key, nx, ny):
-    u0_ds = get_u0_fv(key, nx, ny)
-    return vorticity(u0_ds)
+    u0 = get_u0(key)
+    v0 = vorticity(u0)
+    return vorticity_cfd_to_dg(v0, nx, ny, 0)[...,0]
 
 def get_v0_dg(key, nx, ny, order):
     u0 = get_u0(key)
