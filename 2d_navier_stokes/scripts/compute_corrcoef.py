@@ -27,36 +27,37 @@ from initial_conditions import f_init_MLCFD
 PI = np.pi
 Lx = 2 * PI
 Ly = 2 * PI
-order_exact = 2
-nx_exact = 128
-ny_exact = 128
 t0 = 0.0
-Re = 1000
-viscosity = 1/Re
-forcing_coefficient = 1.0
-damping_coefficient = 0.1
 runge_kutta = "ssp_rk3"
-orders = [0, 1, 2]
-#nxs = [[32, 64, 128], [16, 32, 48, 64], [8, 16, 24, 32, 48]]
-nxs_dg = [[],[],[]]
-nxs_fv_baseline = [32, 64, 128, 256, 512]
-nxs_ps_baseline = [64, 128, 256]
-exact_flux = Flux.UPWIND
 
 density = 1.
 max_velocity = 7.0
 ic_wavenumber = 2
+Re = 1000
+viscosity = 1/Re
+forcing_coefficient = 1.0
+damping_coefficient = 0.1
+
+order_exact = 2
+exact_flux = Flux.UPWIND
+nx_exact = 64
+ny_exact = 64
+
+orders = [0, 1, 2]
+nxs_dg = [[32, 64, 128], [16, 32, 64], [8, 16, 24, 32, 48, 64]]
+#nxs_dg = [[32, 48, 64, 96, 128, 192, 256], [16, 24, 32, 48, 64, 96, 128], [16, 24, 32, 48, 64, 96]]
+#nxs_fv_baseline = [32, 64, 128, 256, 512]
+nxs_fv_baseline = []
+nxs_ps_baseline = []
+nx_max = ny_max = 512
 
 cfl_safety_exact = 0.3
-cfl_safety_dg = 0.3
-cfl_safety_jax_cfd = 0.5
+cfl_safety_dg = 0.4
 cfl_safety_cfd = 0.5
-cfl_safety_ps = 0.5
 
 t_final = 10.0
 outer_steps = int(t_final * 10)
 t_chunk = t_final / outer_steps
-burn_in_time = 0.0
 N_test = 1 # change to 5 or 10
 
 ################
@@ -144,7 +145,7 @@ def get_velocity_cfd(u_x, u_y):
     assert u_x.shape == u_y.shape
     bcs = boundaries.periodic_boundary_conditions(2)
   
-    grid = grids.Grid(u_x.shape, domain=((0, Lx), (0, Ly)))
+    grid = get_grid(u_x.shape[0], u_x.shape[1])
     u_x = grids.GridVariable(grids.GridArray(u_x, grid.cell_faces[0], grid=grid), bcs)
     u_y = grids.GridVariable(grids.GridArray(u_y, grid.cell_faces[1], grid=grid), bcs)
     return (u_x, u_y)
@@ -177,7 +178,8 @@ def downsample_uy(u_y, F):
   return np.mean(u_y[:, F-1::F].reshape(nx // F, F, ny // F), axis=1)
 
 
-def get_dt_cfd(grid):
+def get_dt_cfd(nx, ny):
+    grid = get_grid(nx, ny)
     return cfd.equations.stable_time_step(max_velocity, cfl_safety_cfd, viscosity, grid)
 
 def get_grid(nx, ny):
@@ -192,7 +194,7 @@ def get_forcing_dg(order, nx, ny):
     return lambda zeta: (forcing_coefficient * y_term - dx * dy * damping_coefficient * zeta * leg_ip)
 
 def get_inner_steps_dt_cfd(nx, ny, cfl_safety, T):
-    inner_steps = int(T // get_dt_cfd(grid)) + 1
+    inner_steps = int(T // get_dt_cfd(nx, ny)) + 1
     dt = T / inner_steps
     return inner_steps, dt
 
@@ -222,8 +224,6 @@ def vorticity_cfd_to_dg(vorticity_cfd, nx_new, ny_new, order_new):
     return convert_DG_representation(vorticity_cfd[...,None][None], order_new, 0, nx_new, ny_new, Lx, Ly)[0]
 
 def get_u0(key):
-    nx_max = nxs_fv_baseline[-1]
-    ny_max = nx_max
     grid = grids.Grid((nx_max, ny_max), domain=((0, Lx), (0, Lx)))
     return cfd.initial_conditions.filtered_velocity_field(key, grid, max_velocity, ic_wavenumber)
 
@@ -241,7 +241,7 @@ def get_v0_dg(key, nx, ny, order):
     v0 = vorticity(u0)
     return vorticity_cfd_to_dg(v0, nx, ny, order)
 
-def get_dg_step_fn(args, nx, ny, order, T):
+def get_dg_step_fn(args, nx, ny, order, T, cfl_safety=cfl_safety_dg):
     if order == 0:
         flux = Flux.VANLEER
     else:
@@ -253,7 +253,7 @@ def get_dg_step_fn(args, nx, ny, order, T):
     f_diffusion = get_diffusion_func(order, Lx, Ly, viscosity)
     f_forcing_sim = get_forcing_dg(order, nx, ny)
     
-    inner_steps, dt = get_inner_steps_dt_DG(nx, ny, order, cfl_safety_dg, T)
+    inner_steps, dt = get_inner_steps_dt_DG(nx, ny, order, cfl_safety, T)
 
     @jax.jit
     def simulate(a_i):
@@ -284,10 +284,10 @@ def get_ps_step_fn(nx, ny, T):
 
 
 def store_correlation(n, args, exact_trajectory, nx, ny, name, j, v_j):
-    v_e = convert_DG_representation(exact_trajectory[j][None], 0, order_max, nx, ny, Lx, Ly)[0]
+    v_e = convert_DG_representation(exact_trajectory[j][None], 0, order_exact, nx, ny, Lx, Ly)[0]
     M = np.concatenate([v_j[:,:,0].reshape(-1)[:,None], v_e[:,:,0].reshape(-1)[:,None]],axis=1)
     corrcoeff_j = np.corrcoef(M.T)[0,1]
-    print("Run: {}, {}, nx = {}, T = {:.1f}, corr = {}".format(n, name, nx, j * T_chunk, corrcoeff_j))
+    print("Run: {}, {}, nx = {}, T = {:.1f}, corr = {}".format(n, name, nx, j * t_chunk, corrcoeff_j))
     write_corr_file(n, args, name, nx, j, corrcoeff_j)
 
 
@@ -305,12 +305,12 @@ def compute_corrcoef(n, args, key, orders):
     # Store exact data
     ########
 
-    exact_step_fn = get_dg_step_fn(args, nx_exact, ny_exact, order_exact, t_chunk)
+    exact_step_fn = get_dg_step_fn(args, nx_exact, ny_exact, order_exact, t_chunk, cfl_safety = cfl_safety_exact)
     exact_rollout_fn = get_trajectory_fn(exact_step_fn, outer_steps)
 
     v0 = get_v0_dg(key, nx_exact, ny_exact, order_exact)
     exact_trajectory = exact_rollout_fn(-v0)
-    exact_trajectory = concatenate_vorticity(-v0, exact_trajectory)
+    exact_trajectory = concatenate_vorticity(v0, -exact_trajectory)
 
     store_corr_fn = lambda nx, ny, name, j, v_j:  store_correlation(n, args, exact_trajectory, nx, ny, name, j, v_j)
     
@@ -329,13 +329,13 @@ def compute_corrcoef(n, args, key, orders):
 
         for j in range(outer_steps+1):
             u_j = get_velocity_cfd(trajectory_fv[0][j], trajectory_fv[1][j])
-            store_corr_fn(nx, ny, "fv", j, vorticity(u_j))
+            store_corr_fn(nx, ny, "fv", j, vorticity(u_j)[...,None])
 
 
     ### PS Baseline
     for nx in nxs_ps_baseline:
         ny = nx
-        v0 = get_v0_ps(nx, ny)
+        v0 = get_v0_ps(key, nx, ny)
         step_fn = get_ps_step_fn(nx, ny, t_chunk)
         rollout_fn = get_trajectory_fn(step_fn, outer_steps)
 
@@ -353,11 +353,11 @@ def compute_corrcoef(n, args, key, orders):
         for nx in nxs_dg[o]:
             ny = nx
             v0 = get_v0_dg(key, nx, ny, order)
-            step_fn = get_dg_step_fn(args, nx, ny, order, t_final/outer_steps)
+            step_fn = get_dg_step_fn(args, nx, ny, order, t_chunk)
             rollout_fn = get_trajectory_fn(step_fn, outer_steps)
 
             trajectory = rollout_fn(-v0)
-            trajectory_dg = concatenate_vorticity(-v0, trajectory)
+            trajectory_dg = concatenate_vorticity(v0, -trajectory)
             for j in range(outer_steps+1):
                 store_corr_fn(nx, ny, "order{}".format(order), j, trajectory_dg[j]) 
 
@@ -371,9 +371,6 @@ def main():
     for n in range(N_test):
         key, _ = jax.random.split(key)
         compute_corrcoef(n, args, key, orders)
-
-    #nxs = [[32, 48, 64, 96, 128, 192, 256], [16, 24, 32, 48, 64, 96, 128], [16, 24, 32, 48, 64, 96]]
-    #nxs_fv_baseline = [32, 64, 128, 256, 512]
     
 
 
