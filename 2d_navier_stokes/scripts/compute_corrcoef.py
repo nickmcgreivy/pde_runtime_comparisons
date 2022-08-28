@@ -37,28 +37,31 @@ Re = 1000
 viscosity = 1/Re
 forcing_coefficient = 1.0
 damping_coefficient = 0.1
-
 order_exact = 2
 exact_flux = Flux.UPWIND
+
+
 nx_max = ny_max = 512
-
-
 nx_exact = 128
 ny_exact = 128
 orders = [0, 1, 2]
 nxs_dg = [[64, 128, 256], [16, 32, 48, 64, 96, 128], [8, 16, 24, 32, 48, 64, 96]]
 nxs_fv_baseline = [64, 128, 256, 512]
 nxs_ps_baseline = [64, 128, 256, 512]
+nx_burn_in = ny_burn_in = nx_max
 
 
 cfl_safety_exact = 0.3
-cfl_safety_dg = 0.35
+cfl_safety_dg = 0.3
 cfl_safety_cfd = 0.5
 
 t_final = 10.0
 outer_steps = int(t_final * 10)
 t_chunk = t_final / outer_steps
 N_test = 1 # change to 5 or 10
+
+t_burn_in = 10.0
+
 
 ################
 # END PARAMETERS
@@ -118,7 +121,7 @@ def kolmogorov_forcing_cfd(grid, scale, k):
     u = scale * grids.GridArray(np.sin(k * y), offsets[0], grid)
 
     if grid.ndim == 2:
-        v = grids.GridArray(np.zeros_like(u.data), (1/2, 1), grid)
+        v = grids.GridArray(np.zeros_like(u.data), offsets[1], grid)
         f = (u, v)
     else:
         raise NotImplementedError
@@ -128,6 +131,7 @@ def kolmogorov_forcing_cfd(grid, scale, k):
         return f
     return forcing
 
+
 def get_forcing_cfd(nx, ny):
     grid = get_grid(nx, ny)
     f_constant_term = kolmogorov_forcing_cfd(grid, forcing_coefficient, 4)
@@ -135,11 +139,13 @@ def get_forcing_cfd(nx, ny):
         return tuple(c_i - damping_coefficient * v_i.array for c_i, v_i in zip(f_constant_term(v), v))
     return f_forcing
 
+
 def get_forcing_ps(nx, ny):
     offsets = ((0, 0), (0, 0))
     k=4
     forcing_fn = lambda grid: forcings.kolmogorov_forcing(grid, scale = forcing_coefficient, k=k, offsets=offsets)
     return forcing_fn
+
 
 def get_velocity_cfd(u_x, u_y):
     assert u_x.shape == u_y.shape
@@ -150,6 +156,7 @@ def get_velocity_cfd(u_x, u_y):
     u_y = grids.GridVariable(grids.GridArray(u_y, grid.cell_faces[1], grid=grid), bcs)
     return (u_x, u_y)
 
+
 def get_trajectory_fn(step_fn, outer_steps):
     rollout_fn = jax.jit(cfd.funcutils.trajectory(step_fn, outer_steps))
     
@@ -159,8 +166,10 @@ def get_trajectory_fn(step_fn, outer_steps):
     
     return get_rollout
 
+
 def concatenate_vorticity(v0, trajectory):
     return np.concatenate((v0[None], trajectory), axis=0)
+
 
 def concatenate_velocity(u0, trajectory):
     return (np.concatenate((u0[0].data[None], trajectory[0].data),axis=0), np.concatenate((u0[1].data[None], trajectory[1].data),axis=0))
@@ -182,8 +191,10 @@ def get_dt_cfd(nx, ny):
     grid = get_grid(nx, ny)
     return cfd.equations.stable_time_step(max_velocity, cfl_safety_cfd, viscosity, grid)
 
+
 def get_grid(nx, ny):
     return grids.Grid((nx, ny), domain=((0, Lx), (0, Ly)))
+
 
 def get_forcing_dg(order, nx, ny):
     leg_ip = np.asarray(legendre_inner_product(order))
@@ -193,10 +204,12 @@ def get_forcing_dg(order, nx, ny):
     dy = Ly / ny
     return lambda zeta: (forcing_coefficient * y_term - dx * dy * damping_coefficient * zeta * leg_ip)
 
+
 def get_inner_steps_dt_cfd(nx, ny, cfl_safety, T):
     inner_steps = int(T // get_dt_cfd(nx, ny)) + 1
     dt = T / inner_steps
     return inner_steps, dt
+
 
 def get_inner_steps_dt_DG(nx, ny, order, cfl_safety, T):
     dx = Lx / (nx)
@@ -206,11 +219,14 @@ def get_inner_steps_dt_DG(nx, ny, order, cfl_safety, T):
     dt = T / inner_steps
     return inner_steps, dt
 
+
 def shift_down_left(a):
     return (a + np.roll(a, 1, axis=1) + np.roll(a, 1, axis=0) + np.roll(np.roll(a, 1, axis=0), 1, axis=1)) / 4
 
+
 def vorticity(u):
     return cfd.finite_differences.curl_2d(u).data
+
 
 def downsample_u(u0, nx_new):
     ux, uy = u0
@@ -220,27 +236,46 @@ def downsample_u(u0, nx_new):
     ux_ds, uy_ds = (downsample_ux(ux.data, factor), downsample_uy(uy.data, factor))
     return get_velocity_cfd(ux_ds, uy_ds)
 
+
 def vorticity_cfd_to_dg(vorticity_cfd, nx_new, ny_new, order_new):
     return convert_DG_representation(vorticity_cfd[...,None][None], order_new, 0, nx_new, ny_new, Lx, Ly)[0]
+
 
 def get_u0(key):
     grid = grids.Grid((nx_max, ny_max), domain=((0, Lx), (0, Lx)))
     return cfd.initial_conditions.filtered_velocity_field(key, grid, max_velocity, ic_wavenumber)
+
 
 def get_u0_fv(key, nx, ny):
     assert nx == ny
     u0 = get_u0(key)
     return downsample_u(u0, nx)
 
+def get_u_fv(u, nx, ny):
+    assert nx == ny
+    return downsample_u(u, nx)
+
+
 def get_v0_ps(key, nx, ny):
     u0 = get_u0(key)
     v0 = vorticity(u0)
     return vorticity_cfd_to_dg(v0, nx, ny, 0)[...,0]
 
+
+def get_v_ps(u, nx, ny):
+    v = vorticity(u)
+    return vorticity_cfd_to_dg(v, nx, ny, 0)[...,0]
+
+
 def get_v0_dg(key, nx, ny, order):
     u0 = get_u0(key)
     v0 = vorticity(u0)
     return vorticity_cfd_to_dg(v0, nx, ny, order)
+
+def get_v_dg(u, nx, ny, order):
+    v = vorticity(u)
+    return vorticity_cfd_to_dg(v, nx, ny, order)
+
 
 def get_dg_step_fn(args, nx, ny, order, T, cfl_safety=cfl_safety_dg):
     if order == 0:
@@ -264,9 +299,10 @@ def get_dg_step_fn(args, nx, ny, order, T, cfl_safety=cfl_safety_dg):
         return a
     return simulate
 
-def get_fv_step_fn(nx, ny, T):
+
+def get_fv_step_fn(nx, ny, T, cfl_safety=cfl_safety_cfd):
     grid = get_grid(nx, ny)
-    inner_steps, dt = get_inner_steps_dt_cfd(nx, ny, cfl_safety_cfd, T)
+    inner_steps, dt = get_inner_steps_dt_cfd(nx, ny, cfl_safety, T)
     step_fn = cfd.equations.semi_implicit_navier_stokes(
         density=density, 
         viscosity=viscosity, 
@@ -274,6 +310,7 @@ def get_fv_step_fn(nx, ny, T):
         dt=dt, 
         grid=grid)
     return jax.jit(cfd.funcutils.repeated(step_fn, inner_steps))
+
 
 def get_ps_step_fn(nx, ny, T):
     grid = get_grid(nx, ny)
@@ -302,6 +339,8 @@ def compute_corrcoef(n, args, key, orders):
     create_corr_file(n, args)
 
 
+
+
     ########
     # Store exact data
     ########
@@ -309,9 +348,14 @@ def compute_corrcoef(n, args, key, orders):
     exact_step_fn = get_dg_step_fn(args, nx_exact, ny_exact, order_exact, t_chunk, cfl_safety = cfl_safety_exact)
     exact_rollout_fn = get_trajectory_fn(exact_step_fn, outer_steps)
 
-    v0 = get_v0_dg(key, nx_exact, ny_exact, order_exact)
-    exact_trajectory = exact_rollout_fn(-v0)
-    exact_trajectory = concatenate_vorticity(v0, -exact_trajectory)
+    #v0 = get_v0_dg(key, nx_exact, ny_exact, order_exact)
+    u0 = get_u0(key)
+    burn_in_step_fn = get_fv_step_fn(nx_burn_in, ny_burn_in, t_burn_in)
+    u_burned_in = burn_in_step_fn(u0)
+    v_burned_in = get_v_dg(u_burned_in, nx_exact, ny_exact, order_exact)
+
+    exact_trajectory = exact_rollout_fn(-v_burned_in)
+    exact_trajectory = concatenate_vorticity(v_burned_in, -exact_trajectory)
 
     store_corr_fn = lambda nx, ny, name, j, v_j:  store_correlation(n, args, exact_trajectory, nx, ny, name, j, v_j)
     
@@ -321,12 +365,12 @@ def compute_corrcoef(n, args, key, orders):
     for nx in nxs_fv_baseline:
 
         ny = nx
-        u0 = get_u0_fv(key, nx, ny)
+        u_fv_0 = get_u_fv(u_burned_in, nx, ny)
         step_fn = get_fv_step_fn(nx, ny, t_chunk)
         rollout_fn = get_trajectory_fn(step_fn, outer_steps)
 
-        trajectory = rollout_fn(u0)
-        trajectory_fv = concatenate_velocity(u0, trajectory)
+        trajectory = rollout_fn(u_fv_0)
+        trajectory_fv = concatenate_velocity(u_fv_0, trajectory)
 
         for j in range(outer_steps+1):
             u_j = get_velocity_cfd(trajectory_fv[0][j], trajectory_fv[1][j])
@@ -336,11 +380,11 @@ def compute_corrcoef(n, args, key, orders):
     ### PS Baseline
     for nx in nxs_ps_baseline:
         ny = nx
-        v0 = get_v0_ps(key, nx, ny)
+        v_ps_0 = get_v_ps(u_burned_in, nx, ny)
         step_fn = get_ps_step_fn(nx, ny, t_chunk)
         rollout_fn = get_trajectory_fn(step_fn, outer_steps)
 
-        v_hat0 = np.fft.rfftn(v0)
+        v_hat0 = np.fft.rfftn(v_ps_0)
         trajectory_hat = rollout_fn(v_hat0)
         trajectory_hat_ps = concatenate_vorticity(v_hat0, trajectory_hat)
         trajectory_ps = np.fft.irfftn(trajectory_hat_ps, axes=(1,2))
@@ -353,14 +397,14 @@ def compute_corrcoef(n, args, key, orders):
     for o, order in enumerate(orders):
         for nx in nxs_dg[o]:
             ny = nx
-            v0 = get_v0_dg(key, nx, ny, order)
+            v_dg_0 = get_v_dg(u_burned_in, nx, ny, order)
             step_fn = get_dg_step_fn(args, nx, ny, order, t_chunk)
             rollout_fn = get_trajectory_fn(step_fn, outer_steps)
 
-            trajectory = rollout_fn(-v0)
-            trajectory_dg = concatenate_vorticity(v0, -trajectory)
+            trajectory = rollout_fn(-v_dg_0)
+            trajectory_dg = concatenate_vorticity(v_dg_0, -trajectory)
             for j in range(outer_steps+1):
-                store_corr_fn(nx, ny, "order{}".format(order), j, trajectory_dg[j]) 
+                store_corr_fn(nx, ny, "order{}".format(order), j, trajectory_dg[j])
 
 
 def main():

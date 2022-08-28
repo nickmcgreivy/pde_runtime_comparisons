@@ -35,7 +35,7 @@ N_test = 5 # change to 5 or 10
 
 t_runtime = 50.0
 cfl_safety = 10.0
-cfl_safety_exact = 5.0
+cfl_safety_exact = 3.0
 Re = 1e3
 #t_runtime = 30.0
 #cfl_safety = 6.0
@@ -149,6 +149,10 @@ def print_errors(args):
         exact_trajectory = exact_rollout_fn(a_i)
         exact_trajectory = concatenate_vorticity(a_i, exact_trajectory)
 
+        if np.isnan(exact_trajectory).any():
+            print("NaN in exact trajectory")
+            raise Exception
+
 
         for n, nx in enumerate(nxs_dg):
             ny = nx
@@ -159,10 +163,14 @@ def print_errors(args):
             trajectory = rollout_fn(a_i)
             trajectory = concatenate_vorticity(a_i, trajectory)
 
+            if np.isnan(trajectory).any():
+                print("NaN in trajectory for nx={}")
+                raise Exception
+
             for j in range(outer_steps+1):
                 a_ex = convert_DG_representation(exact_trajectory[j][None], order, order_exact, nx, ny, Lx, Ly, n=8)[0]
                 errors[n, j] += compute_percent_error(trajectory[j], a_ex) / N_test
-
+            print(errors[n])
     print(np.mean(errors, axis=-1))
 
 def main():

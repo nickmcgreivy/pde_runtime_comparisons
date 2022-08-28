@@ -5,7 +5,7 @@ import h5py
 from arguments import get_args
 
 orders = [0, 1, 2]
-nxs_dg = [[64, 128, 256, 512], [16, 32, 48, 64, 96, 128], [8, 16, 24, 32, 48, 64, 96]]
+nxs_dg = [[64, 128, 256], [16, 32, 48, 64, 96, 128], [8, 16, 24, 32, 48, 64, 96]]
 nxs_fv_baseline = [64, 128, 256, 512]
 nxs_ps_baseline = [64, 128, 256, 512]
 
@@ -98,7 +98,7 @@ for n in range(N_test):
 		while True:
 			if f_fv[str(nx)][j] < 0.95:
 				break
-			elif j >= (outer_steps+1):
+			elif j >= (outer_steps):
 				print("WARNING: NOT LESS THAN 0.95, FV, nx ={}".format(nx))
 				break
 			else:
@@ -113,7 +113,7 @@ for n in range(N_test):
 		while True:
 			if f_ps[str(nx)][j] < 0.95:
 				break
-			elif j >= (outer_steps+1):
+			elif j >= (outer_steps):
 				print("WARNING: NOT LESS THAN 0.95, PS, nx ={}".format(nx))
 				break
 			else:
@@ -128,7 +128,7 @@ for n in range(N_test):
 		while True:
 			if f0[str(nx)][j] < 0.95:
 				break
-			elif j >= (outer_steps+1):
+			elif j >= (outer_steps):
 				print("WARNING: NOT LESS THAN 0.95, order={}, nx ={}".format(1, nx))
 				break
 			else:
@@ -142,7 +142,7 @@ for n in range(N_test):
 		while True:
 			if f1[str(nx)][j] < 0.95:
 				break
-			elif j >= (outer_steps+1):
+			elif j >= (outer_steps):
 				print("WARNING: NOT LESS THAN 0.95, order={}, nx ={}".format(1, nx))
 				break
 			else:
@@ -156,7 +156,7 @@ for n in range(N_test):
 		while True:
 			if f2[str(nx)][j] < 0.95:
 				break
-			elif j >= (outer_steps+1):
+			elif j >= (outer_steps):
 				print("WARNING: NOT LESS THAN 0.95, order={}, nx ={}".format(2, nx))
 				break
 			else:
