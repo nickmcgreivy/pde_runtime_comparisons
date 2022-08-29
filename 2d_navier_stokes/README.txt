@@ -25,7 +25,7 @@ cd ../..
 
 Step 3: 
 
-Replace "todo" with top two lines in makefile.
+Replace the lines with TODO with in makefile.
 
 Step 4:
 
