@@ -5,14 +5,14 @@ import h5py
 from arguments import get_args
 
 orders = [0, 1, 2]
-nxs_dg = [[64, 128, 256], [16, 32, 48, 64, 96, 128], [8, 16, 24, 32, 48, 64, 96]]
-nxs_fv_baseline = [64, 128, 256, 512]
-nxs_ps_baseline = [64, 128, 256, 512]
+nxs_dg = [[16, 32, 64, 128, 256], [8, 16, 32, 48, 64, 96, 128, 192], [8, 16, 24, 32, 48, 64, 96, 128]]
+nxs_fv_baseline = [16, 32, 64, 128, 256, 512]
+nxs_ps_baseline = [8, 16, 32, 64, 128, 256]
 
-t_final = 10.0
+t_final = 20.0
 outer_steps = int(t_final * 10)
 t_chunk = t_final / outer_steps
-N_test = 1
+N_test = 5
 T_runtime = 1.0
 device = 'cpu'
 
@@ -171,16 +171,39 @@ fig3, axs3 = plt.subplots()
 
 T = onp.arange(0, outer_steps+1) * t_chunk
 
-for i, nx in enumerate(nxs_fv_baseline):
-	axs1.plot(T, fv_corr[i], label="FV nx={}".format(nx))
 
-for i, nx in enumerate(nxs_ps_baseline):
-	axs1.plot(T, ps_corr[i], label="PS nx={}".format(nx))
-axs1.plot(T, order2_corr[-1], label="DG nx={}".format(nxs_dg[2][-1]))
-axs1.set_xlabel("Time")
-axs1.set_ylabel("Correlation")
+#for i, nx in enumerate(nxs_fv_baseline):
+#	axs1.plot(T, fv_corr[i], label="FV nx={}".format(nx))
 
-fig1.legend()
+
+
+
+
+
+
+
+
+
+
+color_ps = ['#03ffb5', '#34cc7e', '#389c4f', '#2e6e25','#1e4400']
+color_dg = ['#ff7a03', '#d1520c', '#a12b0a', '#710101']
+lw = 3.0
+
+
+nxs_dg_plot1 = [0, 1, 3, 5]
+for i, nx in enumerate(nxs_ps_baseline[1:]):
+	axs1.plot(T, ps_corr[i+1], label="PS nx={}".format(nx), color=color_ps[i], linewidth=lw)
+
+for i, j in enumerate(nxs_dg_plot1):
+	axs1.plot(T, order2_corr[j], label="DG nx={}".format(nxs_dg[2][j]), color=color_dg[i], linewidth=lw, linestyle='-.')
+
+axs1.spines['top'].set_visible(False)
+axs1.spines['right'].set_visible(False)
+axs1.set_xlabel("Simulation time", fontsize=14)
+axs1.set_ylabel("Vorticity correlation", fontsize=14)
+axs1.set_xlim([0,10.0])
+axs1.set_ylim([0,1.01])
+fig1.legend(loc=(0.15, 0.15), frameon=False)
 
 #### Plot 2: grid resolution vs t95
 
@@ -192,28 +215,67 @@ axs2.plot(nxs_dg[2], t95_order2, label="DG p=2")
 axs2.set_xlabel("grid resolution")
 axs2.set_xscale('log')
 axs2.set_ylabel("T95")
+axs2.set_ylim([0.,10.0])
 axs2.set_xticks([])
-axs2.set_xticks([16, 32, 64, 128])
+axs2.set_xticks([8, 16, 32, 64, 128, 256, 512])
 axs2.minorticks_off()
-axs2.set_xticklabels(['16', '32', '64', '128'])
+axs2.set_xticklabels(['8', '16', '32', '64', '128', '256', '512'])
 fig2.legend()
 
 
 
 #### Plot 3: t95 vs runtime
 
-axs3.plot(t95_fv, runtime_fv, label="FV")
-axs3.plot(t95_ps, runtime_ps, label="PS")
-axs3.plot(t95_order0, runtime_dg[0], label="DG p=0")
-axs3.plot(t95_order1, runtime_dg[1], label="DG p=1")
-axs3.plot(t95_order2, runtime_dg[2], label="DG p=2")
-axs3.set_xlabel("T95")
-axs3.set_ylabel("Runtime")
+ms = 15.0
+axs3.plot(t95_fv[2:], runtime_fv[2:], label="Finite Volume")
+axs3.scatter(t95_fv[1:], runtime_fv[1:], s=ms, label="Finite Volume")
+axs3.plot(t95_ps[1:-1], runtime_ps[1:-1], label="Pseudospectral")
+axs3.scatter(t95_ps[1:-1], runtime_ps[1:-1], s=ms, label="Pseudospectral")
+#axs3.plot(t95_order0, runtime_dg[0], label="DG p=0")
+#axs3.plot(t95_order1, runtime_dg[1], label="DG p=1")
+axs3.plot(t95_order2[:-3], runtime_dg[2][:-3], label="Discontinuous Galerkin")
+axs3.scatter(t95_order2[:-3], runtime_dg[2][:-3], s=ms, label="Discontinuous Galerkin")
+
+axs3.spines['top'].set_visible(False)
+axs3.spines['right'].set_visible(False)
+axs3.set_xlabel("Time until correlation $<$ 0.95")
+axs3.set_ylabel("Runtime per unit time (s)")
 axs3.set_yscale('log')
-axs3.set_xlim([0.,10.0])
-fig3.legend()
+axs3.set_xlim([0.,10.])
+axs3.set_ylim([1e-2-6*1e-3,10+4])
 
-
+axs3.text(0.52, 1.03, 'Finite Volume', transform=axs3.transAxes, fontsize=14,
+        verticalalignment='top')
+axs3.text(0.08, 0.22, r'$64$' "\n" r'$\times64$', transform=axs3.transAxes, fontsize=10,
+        verticalalignment='top')
+axs3.text(0.26, 0.57, r'$128$' "\n" r'$\times128$', transform=axs3.transAxes, fontsize=10,
+        verticalalignment='top')
+axs3.text(0.37, 0.78, r'$256$' "\n" r'$\times256$', transform=axs3.transAxes, fontsize=10,
+        verticalalignment='top')
+axs3.text(0.42, 1.0, r'$512$' "\n" r'$\times512$', transform=axs3.transAxes, fontsize=10,
+        verticalalignment='top')
+axs3.text(0.78, 0.74, 'Pseudospectral', transform=axs3.transAxes, fontsize=14,
+        verticalalignment='top')
+axs3.text(0.04, 0.1, r'$16$' "\n" r'$\times16$', transform=axs3.transAxes, fontsize=10,
+        verticalalignment='top')
+axs3.text(0.03, 0.33, r'$32$' "\n" r'$\times32$', transform=axs3.transAxes, fontsize=10,
+        verticalalignment='top')
+axs3.text(0.37, 0.53, r'$64$' "\n" r'$\times64$', transform=axs3.transAxes, fontsize=10,
+        verticalalignment='top')
+axs3.text(0.8, 0.65, r'$128$' "\n" r'$\times128$', transform=axs3.transAxes, fontsize=10,
+        verticalalignment='top')
+axs3.text(0.63, 0.87, 'Discontinuous Galerkin', transform=axs3.transAxes, fontsize=14,
+        verticalalignment='top')
+axs3.text(0.26, 0.1, r'$8$' "\n" r'$\times8$', transform=axs3.transAxes, fontsize=10,
+        verticalalignment='top')
+axs3.text(0.39, 0.34, r'$16$' "\n" r'$\times16$', transform=axs3.transAxes, fontsize=10,
+        verticalalignment='top')
+axs3.text(0.47, 0.61, r'$24$' "\n" r'$\times24$', transform=axs3.transAxes, fontsize=10,
+        verticalalignment='top')
+axs3.text(0.56, 0.7, r'$32$' "\n" r'$\times32$', transform=axs3.transAxes, fontsize=10,
+        verticalalignment='top')
+axs3.text(0.68, 0.82, r'$48$' "\n" r'$\times48$', transform=axs3.transAxes, fontsize=10,
+        verticalalignment='top')
 
 
 plt.show()

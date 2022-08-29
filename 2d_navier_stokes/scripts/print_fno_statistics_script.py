@@ -170,8 +170,8 @@ def print_errors(args):
             for j in range(outer_steps+1):
                 a_ex = convert_DG_representation(exact_trajectory[j][None], order, order_exact, nx, ny, Lx, Ly, n=8)[0]
                 errors[n, j] += compute_percent_error(trajectory[j], a_ex) / N_test
-            print(errors[n])
-    print(np.mean(errors, axis=-1))
+    print("nxs: {}".format(nxs_dg))
+    print("Mean errors: {}".format(np.mean(errors, axis=-1)))
 
 def main():
     args = get_args()

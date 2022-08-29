@@ -45,15 +45,15 @@ forcing_coefficient = 1.0
 damping_coefficient = 0.1
 runge_kutta = "ssp_rk3"
 
-nx_exact = 128
-ny_exact = 128
+nx_exact = 192
+ny_exact = 192
 
 orders = [0, 1, 2]
-nxs_dg = [[64, 128, 256, 512], [16, 32, 48, 64, 96, 128], [8, 16, 24, 32, 48, 64, 96]]
-nxs_fv_baseline = [64, 128, 256, 512]
-nxs_ps_baseline = [64, 128, 256, 512]
+nxs_dg = [[16, 32, 64, 128, 256], [8, 16, 32, 48, 64, 96, 128, 192], [8, 16, 24, 32, 48, 64, 96, 128]]
+nxs_fv_baseline = [16, 32, 64, 128, 256, 512]
+nxs_ps_baseline = [8, 16, 32, 64, 128, 256]
 
-cfl_safety_dg = 0.35
+cfl_safety_dg = 0.3
 cfl_safety_cfd = 0.5
 
 N_compute_runtime = 5

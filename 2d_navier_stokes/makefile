@@ -1,5 +1,5 @@
-BASEDIR=/Users/nickm/thesis/metareview/pde_runtime_comparisons/2d_navier_stokes
-READWRITE_DIR=/Users/nickm/thesis/metareview/pde_runtime_comparisons/2d_navier_stokes
+BASEDIR=(TODO)/pde_runtime_comparisons/2d_navier_stokes
+READWRITE_DIR=(TODO)/pde_runtime_comparisons/2d_navier_stokes
 
 POISSON_DIR=$(BASEDIR)
 MAKE_SCRIPT=$(BASEDIR)/scripts/make.mk
