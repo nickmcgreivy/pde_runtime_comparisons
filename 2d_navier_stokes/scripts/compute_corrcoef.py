@@ -374,7 +374,7 @@ def compute_corrcoef(n, args, key, orders):
 
         for j in range(outer_steps+1):
             u_j = get_velocity_cfd(trajectory_fv[0][j], trajectory_fv[1][j])
-            store_corr_fn(nx, ny, "fv", j, vorticity(u_j)[...,None])
+            store_corr_fn(nx, ny, "fv", j, shift_down_left(vorticity(u_j))[...,None])
 
 
     ### PS Baseline
