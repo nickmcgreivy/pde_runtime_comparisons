@@ -37,18 +37,19 @@ Re = 1000
 viscosity = 1/Re
 forcing_coefficient = 1.0
 damping_coefficient = 0.1
-order_exact = 2
 exact_flux = Flux.UPWIND
 
 
 nx_max = ny_max = 512
 nx_exact = 128
 ny_exact = 128
+order_exact = 2
 orders = [0, 1, 2]
 nxs_dg = [[64, 128, 256], [16, 32, 48, 64, 96, 128], [8, 16, 24, 32, 48, 64, 96]]
 nxs_fv_baseline = [64, 128, 256, 512]
 nxs_ps_baseline = [64, 128, 256, 512]
 nx_burn_in = ny_burn_in = nx_max
+
 
 
 cfl_safety_exact = 0.3
@@ -141,7 +142,8 @@ def get_forcing_cfd(nx, ny):
 
 
 def get_forcing_ps(nx, ny):
-    offsets = ((0, 0), (0, 0))
+    #offsets = ((0, 0), (0, 0))
+    offsets = None
     k=4
     forcing_fn = lambda grid: forcings.kolmogorov_forcing(grid, scale = forcing_coefficient, k=k, offsets=offsets)
     return forcing_fn
@@ -337,8 +339,6 @@ def store_correlation(n, args, exact_trajectory, nx, ny, name, j, v_j):
 def compute_corrcoef(n, args, key, orders):
 
     create_corr_file(n, args)
-
-
 
 
     ########
