@@ -71,11 +71,11 @@ def plot_DG_basis(
 Lx = 1.0
 Ly = 1.0
 order_exact = 2
-nx_exact = 64
-ny_exact = 64
+nx_exact = 60
+ny_exact = 60
 forcing_coefficient = 0.1
 runge_kutta = "ssp_rk3"
-nxs_dg = [8]
+nxs_dg = [5]
 t0 = 0.0
 
 N_compute_runtime = 10 # change to 5 or 10
@@ -84,7 +84,7 @@ N_compute_error = 5 # change to 5 or 10
 t_runtime = 5.0
 t_chunk = 1.0
 outer_steps = int(t_runtime)
-cfl_safety = 40.0 # misnomer
+cfl_safety = 30.0 # misnomer
 cfl_safety_exact = 5.0
 viscosity = 1e-3
 
@@ -221,15 +221,17 @@ def print_errors(args):
                 a_ex = convert_DG_representation(exact_trajectory[j][None], order, order_exact, nx, ny, Lx, Ly, n=8)[0]
                 errors[n, j] += compute_percent_error_l1(trajectory[j], a_ex) / N_compute_error
 
-            fig, axs = plt.subplots(2,2,figsize=(8, 8))
+            
+            fig, axs = plt.subplots(2,2,figsize=(6, 6))
 
             plot_DG_basis(axs[0,0], Lx, Ly, order, exact_trajectory[0], title="Exact Trajectory t=0")
             plot_DG_basis(axs[0,1], Lx, Ly, order, exact_trajectory[-1], title="Exact Trajectory t={}".format(int(t_runtime)))
             plot_DG_basis(axs[1,0], Lx, Ly, order, trajectory[0], title="Low-resolution ({}x{}), t=0".format(nx, ny))
             pcm = plot_DG_basis(axs[1,1], Lx, Ly, order, trajectory[-1], title="Low-resolution ({}x{}), t={}".format(nx, ny, int(t_runtime)))
             fig.colorbar(pcm, ax=axs, extend="max")
-
+            #fig.tight_layout()
             plt.show()
+            
 
     print("nxs: {}".format(nxs_dg))
     print("Mean errors: {}".format(np.mean(errors, axis=-1)))
