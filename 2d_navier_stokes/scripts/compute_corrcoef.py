@@ -39,7 +39,7 @@ forcing_coefficient = 1.0
 damping_coefficient = 0.1
 exact_flux = Flux.UPWIND
 
-
+"""
 nx_max = ny_max = 512
 nx_exact = 192
 ny_exact = 192
@@ -49,14 +49,23 @@ nxs_dg = [[16, 32, 64, 128, 256], [8, 16, 32, 48, 64, 96, 128, 192], [8, 16, 24,
 nxs_fv_baseline = [16, 32, 64, 128, 256, 512]
 nxs_ps_baseline = [8, 16, 32, 64, 128, 256]
 nx_burn_in = ny_burn_in = nx_max
+"""
 
-
+nx_max = ny_max = 128
+nx_exact = 24
+ny_exact = 24
+order_exact = 2
+orders = [0, 1, 2]
+nxs_dg = [[],[],[]]
+nxs_fv_baseline = [16, 32, 64]
+nxs_ps_baseline = [32]
+nx_burn_in = ny_burn_in = nx_max
 
 cfl_safety_exact = 0.3
 cfl_safety_dg = 0.3
 cfl_safety_cfd = 0.5
 
-t_final = 20.0
+t_final = 10.0
 outer_steps = int(t_final * 10)
 t_chunk = t_final / outer_steps
 N_test = 1 # change to 5 or 10

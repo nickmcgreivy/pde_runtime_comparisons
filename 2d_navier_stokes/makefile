@@ -1,5 +1,5 @@
-BASEDIR=(TODO)/pde_runtime_comparisons/2d_navier_stokes
-READWRITE_DIR=(TODO)/pde_runtime_comparisons/2d_navier_stokes
+BASEDIR=/Users/nickm/thesis/metareview/pde_runtime_comparisons/2d_navier_stokes
+READWRITE_DIR=/Users/nickm/thesis/metareview/pde_runtime_comparisons/2d_navier_stokes
 
 POISSON_DIR=$(BASEDIR)
 MAKE_SCRIPT=$(BASEDIR)/scripts/make.mk
@@ -19,3 +19,6 @@ plot_accuracy_runtime:
 
 print_FNO_statistics:
 	make -f $(MAKE_SCRIPT) print_fno_statistics
+
+print_CNO_statistics:
+	make -f $(MAKE_SCRIPT) print_cno_statistics
