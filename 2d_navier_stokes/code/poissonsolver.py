@@ -34,6 +34,7 @@ import os
 import jax.numpy as jnp
 import jax
 from jax.experimental import sparse as jsparse
+from jax.experimental.sparse.linalg import spsolve
 from scipy import sparse
 from scipy.sparse import dok_matrix
 from jax.scipy.linalg import lu_factor
@@ -417,6 +418,11 @@ def get_poisson_solver(basedir, nx, ny, Lx, Ly, order):
     kwargs = {"forward": True}
     custom_lu_solve = lambda b: sparsesolve.sparse_solve_prim(b, *args, **kwargs)
 
+    #tol = 1e-10
+    #V = sparse.csr_matrix.todense(sV)
+    #data, indices, indptr = jsparse.csr_fromdense(V, nse=N_global_elements)
+    #jax_lu_solve = lambda b: spsolve(data, indices, indptr, b, tol=tol)
+
     def solve(xi):
         xi = xi.at[:, :, 0].add(-jnp.mean(xi[:, :, 0]))
         xi = jnp.pad(xi, ((1, 0), (1, 0), (0, 0)), mode="wrap")
@@ -430,6 +436,7 @@ def get_poisson_solver(basedir, nx, ny, Lx, Ly, order):
         b = -F_ijb[T[:, 0], T[:, 1], T[:, 2]]
 
         res = custom_lu_solve(b)
+        #res = jax_lu_solve(b)
         res = res - jnp.mean(res)
         output = res.at[M].get()
         return output

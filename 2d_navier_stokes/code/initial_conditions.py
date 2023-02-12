@@ -2,7 +2,7 @@ import torch
 import math
 import jax.numpy as np
 import jax
-from jax import config
+from jax import config, grad, vmap
 config.update("jax_enable_x64", True)
 
 PI = np.pi
@@ -62,8 +62,8 @@ class GaussianRF(object):
 
 
 
-def get_initial_condition_FNO():
-	GRF = GaussianRF(2, 256, alpha=2.5, tau=7)
+def get_initial_condition_FNO(s=256):
+	GRF = GaussianRF(2, s, alpha=2.5, tau=7)
 	return np.asarray(GRF.sample(1)[0][:,:,None])
 
 
@@ -100,3 +100,27 @@ def f_init_MLCFD(key):
 	)
 	amplitudes = jax.random.uniform(key5, (num_init_modes,)) * amplitude_max
 	return lambda x, y, t: sum_modes(x, y, amplitudes, ks_x, ks_y, phases_x, phases_y)
+
+
+def f_init_CNO(key):
+
+	rho = 0.1
+
+	key1, key2, = jax.random.split(key,2)
+
+	num_modes = 10
+	alpha_k = jax.random.uniform(key1, (num_modes,))
+	beta_k = jax.random.uniform(key2, (num_modes,)) * 2 * PI
+	k = np.arange(1,num_modes+1,num_modes)
+
+	def sigma(x):
+		""" assumes that x is a scalar """
+		return np.sum(alpha_k * np.sin(2 * PI * k * x - beta_k))
+
+	def chi_0(x, y, t):
+		y_below = (y + sigma(x) < 0.5).astype(int)
+		return - y_below * (1 - np.tanh(2 * PI * (y - 0.25) / rho)**2) + (1 - y_below) * (1 - np.tanh(2 * PI * (0.75 - y) / rho)**2)
+	
+
+	return vmap(chi_0, (0, 0, None), 0)
+

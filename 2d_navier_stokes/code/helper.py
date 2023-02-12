@@ -5,6 +5,7 @@ from basisfunctions import (
     legendre_npbasis,
     node_locations,
     legendre_inner_product,
+    legendre_poly,
 )
 from jax import vmap, hessian, jit
 
@@ -365,3 +366,112 @@ def minmod_3(z1, z2, z3):
         * np.absolute(0.5 * ((np.sign(z1) + np.sign(z3))))
     )
     return s * np.minimum(np.absolute(z1), np.minimum(np.absolute(z2), np.absolute(z3)))
+
+
+
+
+
+###### test helper
+
+"""
+
+
+import jax
+import numpy as onp
+from initial_conditions import f_init_MLCFD, get_initial_condition_FNO, f_init_CNO
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+def plot_DG_basis(
+    nx, ny, Lx, Ly, order, zeta, plot_lines=False, title="", plotting_density=4
+):
+    factor = order * plotting_density + 1
+    num_elem = zeta.shape[-1]
+    basis = legendre_poly(order)
+    x = onp.linspace(-1, 1, factor + 1)[:-1] + 1 / factor
+    y = onp.linspace(-1, 1, factor + 1)[:-1] + 1 / factor
+
+    basis_x = onp.zeros((factor, factor, num_elem))
+    for i in range(factor):
+        for j in range(factor):
+            for k in range(num_elem):
+                basis_x[i, j, k] = basis[k].subs("x", x[i]).subs("y", y[j])
+    Nx_plot = nx * factor
+    Ny_plot = ny * factor
+    output = onp.zeros((Nx_plot, Ny_plot))
+    for i in range(nx):
+        for j in range(ny):
+            output[
+                i * factor : (i + 1) * factor, j * factor : (j + 1) * factor
+            ] = onp.sum(basis_x * zeta[i, j, None, None, :], axis=-1)
+    fig, axs = plt.subplots(figsize=(5 * onp.sqrt(Lx / Ly) + 1, onp.sqrt(Ly / Lx) * 5))
+    x_plot = np.linspace(0, Lx, Nx_plot + 1)
+    y_plot = np.linspace(0, Ly, Ny_plot + 1)
+    pcm = axs.pcolormesh(
+        x_plot,
+        y_plot,
+        output.T,
+        shading="flat",
+        cmap='jet',
+        vmin=-1, 
+        vmax=1
+    )
+    axs.set_xlim([0, Lx])
+    axs.set_ylim([0, Ly])
+    axs.set_xticks([0, Lx])
+    axs.set_yticks([0, Ly])
+    axs.set_title(title)
+    fig.colorbar(pcm, ax=axs, extend="max")
+
+    if plot_lines:
+        fig, axs = plt.subplots(figsize=(5 * onp.sqrt(Lx / Ly), onp.sqrt(Ly / Lx) * 5))
+        for j in range(0, Nx_plot, 10):
+            axs.plot(x_plot[:-1], output[j, :])
+        fig, axs = plt.subplots(figsize=(5 * onp.sqrt(Lx / Ly), onp.sqrt(Ly / Lx) * 5))
+        for j in range(0, Ny_plot, 10):
+            axs.plot(y_plot[:-1], output[:, j])
+
+def MSE(a, a_ex):
+    return np.mean((a-a_ex)**2 / legendre_inner_product(order)[None, None, :])
+
+
+key = jax.random.PRNGKey(11)
+PI = np.pi
+f_test = f_init_CNO(key) #lambda x, y, t: np.sin(2 * np.pi * 5.90913910 * x) * np.sin(2 * np.pi * 8.23902901124 * y)
+Lx = 1.0
+Ly = 1.0
+order = 2
+nx_exact = 64
+ny_exact = nx_exact
+nxs = [2, 4, 8, 16, 32]
+a_exact = f_to_DG(nx_exact, ny_exact, Lx, Ly, order, f_test, 0.0, n=8)
+
+print(a_exact)
+
+plot_DG_basis(nx_exact, ny_exact, Lx, Ly, order, a_exact, plotting_density=4)
+plt.show()
+
+
+
+
+n_final = 8
+errors = onp.zeros((len(nxs), n_final))
+
+for i, nx in enumerate(nxs):
+    ny = nx
+
+    a_exact_ds = convert_DG_representation(a_exact[None], order, order, nx, ny, Lx, Ly, n=8)[0]
+
+    for n in range(1, n_final+1):
+
+        a = f_to_DG(nx, ny, Lx, Ly, order, f_test, 0.0, n=n)
+
+        errors[i,n-1] = MSE(a, a_exact_ds)
+
+plt.loglog(nxs, errors)
+plt.show()
+
+"""
+
+
+
