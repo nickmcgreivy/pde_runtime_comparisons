@@ -52,7 +52,7 @@ from basisfunctions import (
     num_elements_FE,
 )
 import sparsesolve
-
+import jax.experimental.host_callback as hcb
 
 def get_bottom_indices(order):
     if order == 1 or order == 0:
@@ -416,12 +416,12 @@ def get_poisson_solver(basedir, nx, ny, Lx, Ly, order):
     V_sp = jsparse.BCOO.from_scipy_sparse(sV)
     args = V_sp.data, V_sp.indices, N_global_elements
     kwargs = {"forward": True}
-    custom_lu_solve = lambda b: sparsesolve.sparse_solve_prim(b, *args, **kwargs)
+    custom_lu_solve = jit(lambda b: sparsesolve.sparse_solve_prim(b, *args, **kwargs))
 
-    #tol = 1e-10
-    #V = sparse.csr_matrix.todense(sV)
-    #data, indices, indptr = jsparse.csr_fromdense(V, nse=N_global_elements)
-    #jax_lu_solve = lambda b: spsolve(data, indices, indptr, b, tol=tol)
+    tol = 1e-10
+    V = sparse.csr_matrix.todense(sV)
+    data, indices, indptr = jsparse.csr_fromdense(V, nse=N_global_elements)
+    jax_lu_solve = lambda b: spsolve(data, indices, indptr, b, tol=tol)
 
     def solve(xi):
         xi = xi.at[:, :, 0].add(-jnp.mean(xi[:, :, 0]))
@@ -435,7 +435,7 @@ def get_poisson_solver(basedir, nx, ny, Lx, Ly, order):
         )[0]
         b = -F_ijb[T[:, 0], T[:, 1], T[:, 2]]
 
-        res = custom_lu_solve(b)
+        res = hcb.call(custom_lu_solve, b, result_shape=jax.ShapeDtypeStruct(b.shape, b.dtype))
         #res = jax_lu_solve(b)
         res = res - jnp.mean(res)
         output = res.at[M].get()
