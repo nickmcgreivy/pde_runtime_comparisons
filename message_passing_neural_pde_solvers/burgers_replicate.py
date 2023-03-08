@@ -73,7 +73,7 @@ def quadrature(f, a, b, n=1):
     It uses Gaussian Quadrature of order (2n-1), 
     see https://en.wikipedia.org/wiki/Gaussian_quadrature.
 
-    Default is n=2, 3rd-order quadrature.
+    Default is n=1, 1st-order quadrature.
     """
     assert isinstance(n, int) and n <= 8 and n > 0
     w = {
@@ -203,8 +203,9 @@ def integrate_function_fv(f, t, nx, n=1):
     """
     Takes a scalar function f(x,t) and outputs
     an integral representation of the function
-    using an n-point Gaussian quadrature at time t. 
-    The integral representation has nx points.
+    using an n-point Gaussian quadrature at time t.
+    The integral representation is over each of the nx
+    cells and results in a vector of shape (nx,).
     """
     cell_boundaries = jnp.linspace(0, L, nx+1)
     cell_boundaries_L = cell_boundaries[:-1]
@@ -242,7 +243,14 @@ def _scan_output(sol, x, rk_F):
     return (a_f, t_f), a
 
 
+def f(u):
+    """ This is the Burgers' equation flux function. """
+    return u**2/2
+
 def _godunov_flux_1D_burgers(a):
+    """ 
+    Here I use the 'Godunov' flux to compute the flux at the right cell boundary. 
+    """
     a = jnp.pad(a, ((0, 1)), "wrap")
     u_left = a[:-1]
     u_right = a[1:]
@@ -253,11 +261,11 @@ def _godunov_flux_1D_burgers(a):
     ) * jnp.maximum(f(u_left), f(u_right))
 
 
-def f(u):
-    return u**2/2
-
 
 def _weno_flux_1D_burgers(a):
+    """ 
+    Here I use the 'WENO' flux to compute the flux at the right cell boundary. 
+    """
     epsilon = 1e-6
     d0 = 1/10
     d1 = 6/10
@@ -320,7 +328,9 @@ def time_derivative_1D_burgers(
     a, t, dx, flux, nu, forcing_func=None,
 ):
     """
-    We are solving the 1D Burgers' equation du/dt + u^2/2 = F(x,t) + nu * d^2u/dx^22
+    We are solving the 1D Burgers' equation du/dt + u^2/2 = F(x,t) + nu * d^2u/dx^2.
+    Here we compute the time-derivative at time t if the solution is given by 
+    the vector 'a' of shape (nx,).
     """
 
     if flux == "godunov":
@@ -376,20 +386,25 @@ def simulate_1D(
 
 
 def get_dt_nt(Tf, nu, nx, max_u, cfl_safety, diff_safety):
+    """
+    This function returns the number of timesteps nt and
+    the timestep dt for a given integration time Tf, diffusion
+    coefficient nu, number of gridpoints nx, maximum value of
+    the Burgers' solution, and dimensionless scalar values representing
+    the cfl number and diffusion number for explicit timestepping.
+    """
     dx = L / nx
     dt_cfl = cfl_safety * dx / max_u
     if nu is not None and nu > 0.0:
         dt_diffusion = diff_safety * dx**2 / nu
         dt = jnp.minimum(dt_cfl, dt_diffusion)
-        
     else:
         dt = dt_cfl
-    nt = int(Tf / dt)
 
     if nx == nx_exact:
         nt = 320
     else:
-        nt = (nt // 20 + 1) * 20
+        nt = int(((Tf / dt)) // 20 + 1) * 20
 
     return Tf/nt, nt
 
@@ -403,7 +418,7 @@ def accumulated_mse(traj_1, traj_2):
     return jnp.sum(jnp.mean((traj_1-traj_2)**2,axis=1),axis=0)
 
  
-def plot_subfig(a, subfig, L, color="blue", linewidth=0.5, linestyle="solid", label=None):
+def plot_subfig(a, subfig, color="blue", linewidth=0.5, linestyle="solid", label=None):
     """
     This is a plotting function. a is a vector of shape (nx,)
     """
@@ -473,33 +488,28 @@ for i, nx in enumerate(nxs):
 
 accumulated_errors = onp.zeros(len(nxs))
 
+@partial(jit, static_argnums=(1,))
+def get_trajectory(key, nx):
+    f_forcing = forcing_func(key)
+    f_init = lambda x, t: f_forcing(x, t0)
+    dx = L/nx
+    a0 = integrate_function_fv(f_init, t0, nx) / dx
+    dt, nt = get_dt_nt(T_final, nu, nx, max_u, cfl_safety, diff_safety)
+    return simulate_1D(a0, t0, dx, dt, nt, nu, output=True, forcing_func=f_forcing, flux=flux)
+
+
 for n in range(n_test_table1):
 
     key, _ = random.split(key)
-    f_forcing = forcing_func(key)
-    f_init = lambda x, t: f_forcing(x, t0)
-
-    dx_exact = L/nx_exact
-    a0_exact = integrate_function_fv(f_init, t0, nx_exact) / dx_exact
-    dt_exact, nt_exact = get_dt_nt(T_final, nu, nx_exact, max_u, cfl_safety, diff_safety)
-    trajectory_exact = simulate_1D(a0_exact, t0, dx_exact, dt_exact, nt_exact, nu, output=True, forcing_func=f_forcing, flux=flux)
+    trajectory_exact = get_trajectory(key, nx_exact)
 
     if n == 0:
-        plot_subfig(
-            trajectory_exact[-1],
-            axs,
-            L,
-            color="black",
-            label="nx={}".format(nx_exact),
-            linewidth=1.2,
-        )
+        plot_subfig(trajectory_exact[-1], axs, color="black", label="nx={}".format(nx_exact), linewidth=1.2,)
 
     for i, nx in enumerate(nxs):
 
-        dx = L/nx
-        a0 = integrate_function_fv(f_init, t0, nx) / dx
-        dt, nt = get_dt_nt(T_final, nu, nx, max_u, cfl_safety, diff_safety)
-        trajectory = simulate_1D(a0, t0, dx, dt, nt, nu, output=True, forcing_func=f_forcing, flux=flux)
+
+        trajectory = get_trajectory(key, nx)
 
         UPSAMPLE = trajectory_exact.shape[0] // trajectory.shape[0]
         trajectory_exact_ds = jnp.mean(trajectory_exact[::UPSAMPLE].reshape(-1, nx, nx_exact//nx),axis=-1)
@@ -507,14 +517,7 @@ for n in range(n_test_table1):
         accumulated_errors[i] += accumulated_mse(trajectory, trajectory_exact_ds) / n_test_table1 * (250 / trajectory.shape[0])
 
         if n == 0:
-            plot_subfig(
-                trajectory[-1],
-                axs,
-                L,
-                color=colors[i],
-                label="nx={}".format(nx),
-                linewidth=1.2,
-            )
+            plot_subfig(trajectory[-1], axs, color=colors[i], label="nx={}".format(nx), linewidth=1.2,)
 
 for i, nx in enumerate(nxs):
     print("E1 WENO5: nx = {}, Accumulated MSE = {:.3f}".format(nx, accumulated_errors[i]))
@@ -552,7 +555,6 @@ for i, nx in enumerate(nxs):
 
     nu = random.uniform(key2, (1,)) * nu_max
 
-
     @partial(jit, static_argnums=(3,))
     def sim(a0, t0, dt, nt):
         return simulate_1D(a0, t0, dx, dt, nt, nu, forcing_func=f_forcing, flux=flux)
@@ -574,42 +576,37 @@ for i, nx in enumerate(nxs):
 #######################
 
 
-key = random.PRNGKey(4)
-key1, key2 = random.split(key)
-f_forcing = forcing_func(key1)
+key = random.PRNGKey(5)
 
 accumulated_errors = onp.zeros(len(nxs))
+
+@partial(jit, static_argnums=(1, 3))
+def get_trajectory(key, nx, dt, nt):
+    key1, key2 = random.split(key)
+    f_forcing = forcing_func(key1)
+    nu = random.uniform(key2, (1,)) * nu_max
+    f_init = lambda x, t: f_forcing(x, t0)
+    dx = L/nx
+    a0 = integrate_function_fv(f_init, t0, nx) / dx
+    return simulate_1D(a0, t0, dx, dt, nt, nu, output=True, forcing_func=f_forcing, flux=flux)
+
+
 
 for n in range(n_test_table1):
 
     key, _ = random.split(key)
-    f_forcing = forcing_func(key)
-    f_init = lambda x, t: f_forcing(x, t0)
 
-    nu = random.uniform(key2, (1,)) * nu_max
 
-    dx_exact = L/nx_exact
-    a0_exact = integrate_function_fv(f_init, t0, nx_exact) / dx_exact
-    dt_exact, nt_exact = get_dt_nt(T_final, nu_max, nx_exact, max_u, cfl_safety, diff_safety)
-    trajectory_exact = simulate_1D(a0_exact, t0, dx_exact, dt_exact, nt_exact, nu, output=True, forcing_func=f_forcing, flux=flux)
+    dt, nt = get_dt_nt(T_final, nu_max, nx_exact, max_u, cfl_safety, diff_safety)
+    trajectory_exact = get_trajectory(key, nx_exact, dt, nt)
 
     if n == 0:
-        plot_subfig(
-            trajectory_exact[-1],
-            axs,
-            L,
-            color="black",
-            label="nx={}".format(nx_exact),
-            linewidth=1.2,
-        )
+        plot_subfig(trajectory_exact[-1], axs, color="black", label="nx={}".format(nx_exact), linewidth=1.2,)
 
     for i, nx in enumerate(nxs):
 
-        dx = L/nx
-        a0 = integrate_function_fv(f_init, t0, nx) / dx
         dt, nt = get_dt_nt(T_final, nu_max, nx, max_u, cfl_safety, diff_safety)
-        trajectory = simulate_1D(a0, t0, dx, dt, nt, nu, output=True, forcing_func=f_forcing, flux=flux)
-
+        trajectory = get_trajectory(key, nx, dt, nt)
 
         UPSAMPLE = trajectory_exact.shape[0] // trajectory.shape[0]
         trajectory_exact_ds = jnp.mean(trajectory_exact[::UPSAMPLE].reshape(-1, nx, nx_exact//nx),axis=-1)
@@ -617,14 +614,7 @@ for n in range(n_test_table1):
         accumulated_errors[i] += accumulated_mse(trajectory, trajectory_exact_ds) / n_test_table1 * (250 / trajectory.shape[0])
 
         if n == 0:
-            plot_subfig(
-                trajectory[-1],
-                axs,
-                L,
-                color=colors[i],
-                label="nx={}".format(nx),
-                linewidth=1.2,
-            )
+            plot_subfig(trajectory[-1], axs, color=colors[i], label="nx={}".format(nx), linewidth=1.2,)
 
 for i, nx in enumerate(nxs):
     print("E2 WENO5: nx = {}, Accumulated MSE = {:.3f}".format(nx, accumulated_errors[i]))
